@@ -47,6 +47,11 @@ dependencies {
     implementation(libs.lifecycle.viewmodel.compose)
     implementation(libs.coroutines.android)
 
+    // youtubedl-android: init in AxBrowserApp
+    val youtubedlAndroid = "0.18.1"
+    implementation("io.github.junkfood02.youtubedl-android:library:$youtubedlAndroid")
+    implementation("io.github.junkfood02.youtubedl-android:ffmpeg:$youtubedlAndroid")
+
     testImplementation(libs.junit5.api)
     testRuntimeOnly(libs.junit5.engine)
 }
