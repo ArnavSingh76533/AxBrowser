@@ -4,10 +4,10 @@ import android.content.Context
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.channels.awaitClose
 import java.io.File
 
 class YtDlpEngine(private val context: Context) {
@@ -24,6 +24,7 @@ class YtDlpEngine(private val context: Context) {
             addOption("--fragment-retries", "3")
             addOption("--no-warnings")
             addOption("--no-check-certificates")
+            addOption("--newline")
 
             val format = formatId ?: "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
             addOption("-f", format)
@@ -37,32 +38,68 @@ class YtDlpEngine(private val context: Context) {
                 request,
                 processId
             ) { progress, etaInSeconds, line ->
-                val etaStr = if (etaInSeconds > 0) "${etaInSeconds}s" else ""
+                if (line != null) {
+                    val resolvedPath = parseActualPath(line)
+                    if (resolvedPath != null) {
+                        trySend(DownloadProgressUnified.FileResolved(resolvedPath))
+                    }
+                }
+
+                val displayLine = when {
+                    line == null -> ""
+                    line.contains("Deleting") -> ""
+                    line.contains("ffmpeg") && line.contains("Merging") -> "Merging..."
+                    line.contains("[download]") && line.contains("%") -> line.trim().take(50)
+                    else -> ""
+                }
+
+                val etaStr = if (etaInSeconds > 0) "ETA ${etaInSeconds}s" else ""
                 trySend(
                     DownloadProgressUnified.Running(
                         percent       = progress,
-                        speedStr      = etaStr.ifBlank { "..." },
-                        totalBytesStr = line?.trim()?.take(40) ?: ""
+                        speedStr      = etaStr.ifBlank { if (progress > 0f) "Downloading" else "Starting..." },
+                        totalBytesStr = displayLine
                     )
                 )
             }
             trySend(DownloadProgressUnified.Completed)
         } catch (e: com.yausername.youtubedl_android.YoutubeDLException) {
-            trySend(DownloadProgressUnified.Failed(
-                "yt-dlp error: ${e.message ?: "Unknown error"}"
-            ))
+            trySend(DownloadProgressUnified.Failed("yt-dlp error: ${e.message ?: "Unknown error"}"))
         } catch (e: InterruptedException) {
             trySend(DownloadProgressUnified.Failed("Download cancelled"))
         } catch (e: Exception) {
-            trySend(DownloadProgressUnified.Failed(
-                "Download failed: ${e.message ?: "Unknown error"}"
-            ))
+            trySend(DownloadProgressUnified.Failed("Download failed: ${e.message ?: "Unknown error"}"))
         } finally {
             awaitClose {
                 runCatching { YoutubeDL.getInstance().destroyProcessById(processId) }
             }
         }
     }.flowOn(Dispatchers.IO)
+
+    private fun parseActualPath(line: String): String? {
+        val destRegex = Regex("""\[download\] Destination: (.+)""")
+        val destMatch = destRegex.find(line)
+        if (destMatch != null) {
+            val path = destMatch.groupValues[1].trim()
+            if (File(path).parentFile?.exists() == true) return path
+        }
+
+        val mergeRegex = Regex("""Merging formats into "(.+)"""")
+        val mergeMatch = mergeRegex.find(line)
+        if (mergeMatch != null) {
+            val path = mergeMatch.groupValues[1].trim()
+            if (File(path).parentFile?.exists() == true) return path
+        }
+
+        val extractRegex = Regex("""\[ExtractAudio\] Destination: (.+)""")
+        val extractMatch = extractRegex.find(line)
+        if (extractMatch != null) {
+            val path = extractMatch.groupValues[1].trim()
+            if (File(path).parentFile?.exists() == true) return path
+        }
+
+        return null
+    }
 
     suspend fun getInfo(url: String): VideoInfo? = runCatching {
         val info = YoutubeDL.getInstance().getInfo(url)
@@ -85,7 +122,7 @@ class YtDlpEngine(private val context: Context) {
                 YoutubeDL.UpdateChannel.STABLE
             )
             when (status) {
-                YoutubeDL.UpdateStatus.DONE         -> onSuccess()
+                YoutubeDL.UpdateStatus.DONE              -> onSuccess()
                 YoutubeDL.UpdateStatus.ALREADY_UP_TO_DATE -> onSuccess()
                 else -> onError("Update status: $status")
             }

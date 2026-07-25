@@ -123,7 +123,15 @@ fun BrowserNavHost() {
                 BrowserScreen(downloadViewModel = downloadViewModel)
             }
             composable(NavRoute.Downloads.route) {
-                DownloadManagerScreen(onBack = { navController.popBackStack() }, viewModel = downloadViewModel)
+                DownloadManagerScreen(
+                    onBack = { navController.popBackStack() },
+                    viewModel = downloadViewModel,
+                    onPlayInApp = { filePath, title ->
+                        val encodedPath = java.net.URLEncoder.encode(filePath, "UTF-8")
+                        val encodedTitle = java.net.URLEncoder.encode(title, "UTF-8")
+                        navController.navigate("videoplayer?url=file://$encodedPath&title=$encodedTitle")
+                    }
+                )
             }
             composable(NavRoute.Bookmarks.route) {
                 BookmarkScreen(onBookmarkClick = { navController.navigate(NavRoute.Browser.route) }, onBack = { navController.popBackStack() })

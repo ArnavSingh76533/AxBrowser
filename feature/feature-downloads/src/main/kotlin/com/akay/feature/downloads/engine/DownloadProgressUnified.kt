@@ -6,6 +6,7 @@ sealed class DownloadProgressUnified {
         val speedStr: String,
         val totalBytesStr: String
     ) : DownloadProgressUnified()
+    data class FileResolved(val absolutePath: String) : DownloadProgressUnified()
     data object Completed : DownloadProgressUnified()
     data class Failed(val reason: String) : DownloadProgressUnified()
 }

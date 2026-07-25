@@ -3,6 +3,9 @@ package com.akay.feature.downloads.viewmodel
 import android.app.Application
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
@@ -20,6 +23,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 import javax.inject.Inject
@@ -29,6 +33,8 @@ data class DownloadItem(
     val url: String,
     val filename: String,
     val outputPath: String,
+    val actualOutputPath: String? = null,
+    val thumbnailPath: String? = null,
     val progress: Float = 0f,
     val speedStr: String = "",
     val totalStr: String = "",
@@ -36,7 +42,15 @@ data class DownloadItem(
     val errorMsg: String? = null,
     val useYtDlp: Boolean = false,
     val formatId: String? = null
-)
+) {
+    val resolvedPath: String get() = actualOutputPath ?: outputPath
+    val displayName: String get() = when {
+        actualOutputPath != null -> File(actualOutputPath).name
+        filename == "%(title)s.%(ext)s" -> "Downloading..."
+        filename.contains("%(") -> "Downloading..."
+        else -> filename
+    }
+}
 
 enum class ItemStatus { QUEUED, RUNNING, PAUSED, COMPLETED, FAILED, CANCELLED }
 
@@ -82,38 +96,27 @@ class DownloadViewModel @Inject constructor(
         File(base, "AxBrowser Downloads").also { it.mkdirs() }
     }
 
-    init {
-        checkYtDlp()
-    }
+    init { checkYtDlp() }
 
     private fun checkYtDlp() {
         val installed = YtDlpSetup.isInstalled(getApplication())
         _state.update { it.copy(ytDlpReady = installed) }
         if (!installed) {
-            _state.update {
-                it.copy(setupError = "yt-dlp not initialized. Restart the app.")
-            }
+            _state.update { it.copy(setupError = "yt-dlp not initialized. Restart the app.") }
         }
     }
 
-    fun retryYtDlpCheck() {
-        checkYtDlp()
-    }
+    fun retryYtDlpCheck() { checkYtDlp() }
 
-    fun enqueue(
-        url: String,
-        filename: String,
-        useYtDlp: Boolean = true,
-        formatId: String? = null
-    ): String {
+    fun enqueue(url: String, filename: String, useYtDlp: Boolean = true, formatId: String? = null): String {
         val id = UUID.randomUUID().toString()
-        val outputFile = uniqueFile(downloadDir, filename)
         val canUseYtDlp = useYtDlp && _state.value.ytDlpReady
 
         val item = DownloadItem(
-            id = id, url = url, filename = outputFile.name,
-            outputPath = outputFile.absolutePath, useYtDlp = canUseYtDlp, formatId = formatId,
-            errorMsg = if (useYtDlp && !_state.value.ytDlpReady) "yt-dlp not available - using direct download" else null
+            id = id, url = url, filename = filename,
+            outputPath = if (canUseYtDlp) "${downloadDir.absolutePath}/$filename" else uniqueFile(downloadDir, filename).absolutePath,
+            useYtDlp = canUseYtDlp, formatId = formatId,
+            errorMsg = if (useYtDlp && !_state.value.ytDlpReady) "yt-dlp not available" else null
         )
         _state.update { it.copy(downloads = it.downloads + item) }
         startDownload(item)
@@ -139,23 +142,36 @@ class DownloadViewModel @Inject constructor(
 
             flow.collect { progress ->
                 when (progress) {
+                    is DownloadProgressUnified.FileResolved -> {
+                        val actualFile = File(progress.absolutePath)
+                        updateItem(item.id) {
+                            it.copy(
+                                actualOutputPath = progress.absolutePath,
+                                filename = actualFile.name
+                            )
+                        }
+                    }
                     is DownloadProgressUnified.Running -> {
                         updateItem(item.id) {
                             it.copy(
                                 progress = progress.percent,
                                 speedStr = progress.speedStr,
                                 totalStr = progress.totalBytesStr,
-                                status   = ItemStatus.RUNNING
+                                status = ItemStatus.RUNNING
                             )
                         }
-                        DownloadNotificationManager.showProgress(
-                            ctx, item.id, item.filename,
-                            progress.percent, progress.speedStr, progress.totalBytesStr
-                        )
+                        val displayName = _state.value.downloads.find { it.id == item.id }?.displayName ?: item.filename
+                        DownloadNotificationManager.showProgress(ctx, item.id, displayName, progress.percent, progress.speedStr, progress.totalBytesStr)
                     }
                     DownloadProgressUnified.Completed -> {
-                        updateItem(item.id) { it.copy(progress = 100f, status = ItemStatus.COMPLETED) }
-                        DownloadNotificationManager.showComplete(ctx, item.id, item.filename)
+                        val completedItem = _state.value.downloads.find { it.id == item.id }
+                        val resolvedPath = completedItem?.resolvedPath ?: item.outputPath
+                        val thumbPath = generateThumbnail(resolvedPath)
+                        updateItem(item.id) {
+                            it.copy(progress = 100f, status = ItemStatus.COMPLETED, thumbnailPath = thumbPath)
+                        }
+                        val displayName = completedItem?.displayName ?: item.filename
+                        DownloadNotificationManager.showComplete(ctx, item.id, displayName)
                     }
                     is DownloadProgressUnified.Failed -> {
                         updateItem(item.id) { it.copy(status = ItemStatus.FAILED, errorMsg = progress.reason) }
@@ -165,6 +181,55 @@ class DownloadViewModel @Inject constructor(
             }
         }
         downloadJobs[item.id] = job
+    }
+
+    private suspend fun generateThumbnail(filePath: String): String? = withContext(Dispatchers.IO) {
+        val file = File(filePath)
+        if (!file.exists()) return@withContext null
+        val ext = file.extension.lowercase()
+        if (ext !in setOf("mp4", "mkv", "avi", "mov", "webm", "ts", "flv", "3gp")) return@withContext null
+        runCatching {
+            val retriever = MediaMetadataRetriever()
+            retriever.setDataSource(filePath)
+            val bitmap = retriever.getFrameAtTime(1_000_000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            retriever.release()
+            if (bitmap == null) return@withContext null
+            val thumbFile = File(file.parent, ".thumb_${file.nameWithoutExtension}.jpg")
+            thumbFile.outputStream().use { out -> bitmap.compress(Bitmap.CompressFormat.JPEG, 80, out) }
+            bitmap.recycle()
+            thumbFile.absolutePath
+        }.getOrNull()
+    }
+
+    fun openFile(id: String, context: Context, onPlayInApp: ((filePath: String, title: String) -> Unit)? = null) {
+        val item = _state.value.downloads.find { it.id == id } ?: return
+        var path = item.resolvedPath
+        var file = File(path)
+        if (!file.exists()) {
+            val found = downloadDir.listFiles()?.firstOrNull { it.nameWithoutExtension == file.nameWithoutExtension }
+            if (found != null) {
+                updateItem(id) { it.copy(actualOutputPath = found.absolutePath) }
+                path = found.absolutePath
+                file = found
+            } else return
+        }
+        val ext = file.extension.lowercase()
+        val isMedia = ext in setOf("mp4", "mkv", "avi", "mov", "webm", "ts", "flv", "3gp", "m3u8", "mp3", "m4a", "aac", "ogg", "flac", "wav", "opus")
+        if (isMedia && onPlayInApp != null) {
+            onPlayInApp(file.absolutePath, item.displayName)
+            return
+        }
+        try {
+            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, context.contentResolver.getType(uri) ?: "*/*")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(Intent.createChooser(intent, "Open with"))
+        } catch (_: Exception) {
+            val uri = Uri.fromFile(file)
+            context.startActivity(Intent(Intent.ACTION_VIEW, uri))
+        }
     }
 
     fun pause(id: String) {
@@ -194,7 +259,8 @@ class DownloadViewModel @Inject constructor(
 
     fun delete(id: String) {
         val item = _state.value.downloads.find { it.id == id } ?: return
-        File(item.outputPath).delete()
+        File(item.resolvedPath).delete()
+        item.thumbnailPath?.let { File(it).delete() }
         downloadJobs[id]?.cancel()
         DownloadNotificationManager.cancel(getApplication(), id)
         _state.update { it.copy(downloads = it.downloads.filter { d -> d.id != id }) }
@@ -205,43 +271,15 @@ class DownloadViewModel @Inject constructor(
             _state.update { it.copy(isSettingUpYtDlp = true, setupError = null) }
             ytDlpEngine.updateYtDlp(
                 onProgress = { msg -> _state.update { it.copy(setupError = msg) } },
-                onSuccess  = {
-                    _state.update { it.copy(
-                        isSettingUpYtDlp = false,
-                        ytDlpReady       = true,
-                        setupError       = null
-                    )}
-                },
-                onError = { err ->
-                    _state.update { it.copy(isSettingUpYtDlp = false, setupError = err) }
-                }
+                onSuccess  = { _state.update { it.copy(isSettingUpYtDlp = false, ytDlpReady = true, setupError = null) } },
+                onError    = { err -> _state.update { it.copy(isSettingUpYtDlp = false, setupError = err) } }
             )
-        }
-    }
-
-    fun openFile(id: String, context: Context) {
-        val item = _state.value.downloads.find { it.id == id } ?: return
-        val file = File(item.outputPath)
-        if (!file.exists()) return
-        try {
-            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, context.contentResolver.getType(uri) ?: "*/*")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            context.startActivity(Intent.createChooser(intent, "Open with"))
-        } catch (_: Exception) {
-            val uri = Uri.fromFile(file)
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "*/*")
-            }
-            context.startActivity(Intent.createChooser(intent, "Open with"))
         }
     }
 
     fun shareFile(id: String, context: Context) {
         val item = _state.value.downloads.find { it.id == id } ?: return
-        val file = File(item.outputPath)
+        val file = File(item.resolvedPath)
         if (!file.exists()) return
         try {
             val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
@@ -253,18 +291,12 @@ class DownloadViewModel @Inject constructor(
             context.startActivity(Intent.createChooser(intent, "Share via"))
         } catch (_: Exception) {
             val uri = Uri.fromFile(file)
-            val intent = Intent(Intent.ACTION_SEND).apply {
-                type = "*/*"
-                putExtra(Intent.EXTRA_STREAM, uri)
-            }
-            context.startActivity(Intent.createChooser(intent, "Share via"))
+            context.startActivity(Intent(Intent.ACTION_SEND).apply { type = "*/*"; putExtra(Intent.EXTRA_STREAM, uri) })
         }
     }
 
     private fun updateItem(id: String, block: (DownloadItem) -> DownloadItem) {
-        _state.update { state ->
-            state.copy(downloads = state.downloads.map { if (it.id == id) block(it) else it })
-        }
+        _state.update { state -> state.copy(downloads = state.downloads.map { if (it.id == id) block(it) else it }) }
     }
 
     private fun uniqueFile(dir: File, name: String): File {
