@@ -142,7 +142,8 @@ fun DownloadCard(
                     if (item.thumbnailPath != null) {
                         val bitmap = remember(item.thumbnailPath) {
                             runCatching {
-                                android.graphics.BitmapFactory.decodeFile(item.thumbnailPath)?.let { androidx.compose.ui.graphics.asImageBitmap(it) }
+                                val bmp = android.graphics.BitmapFactory.decodeFile(item.thumbnailPath)
+                                bmp?.asImageBitmap()
                             }.getOrNull()
                         }
                         if (bitmap != null) {

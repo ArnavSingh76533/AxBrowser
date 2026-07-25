@@ -5,6 +5,7 @@ import android.content.pm.ActivityInfo
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
