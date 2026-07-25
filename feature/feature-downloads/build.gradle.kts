@@ -26,6 +26,11 @@ dependencies {
     implementation(libs.hilt.work)
     ksp(libs.hilt.work.compiler)
 
+    // youtubedl-android: Python + yt-dlp bundled for Android — used by Seal app
+    val youtubedlAndroid = "0.18.1"
+    implementation("io.github.junkfood02.youtubedl-android:library:$youtubedlAndroid")
+    implementation("io.github.junkfood02.youtubedl-android:ffmpeg:$youtubedlAndroid")
+
     testImplementation(libs.junit5.api)
     testRuntimeOnly(libs.junit5.engine)
 }

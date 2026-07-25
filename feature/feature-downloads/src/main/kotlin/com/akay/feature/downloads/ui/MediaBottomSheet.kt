@@ -98,7 +98,7 @@ fun MediaItemRow(
             }
             Spacer(Modifier.height(4.dp))
             FilledTonalButton(onClick = onDownloadYtDlp, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
-                Text("YT-DLP", style = MaterialTheme.typography.labelSmall)
+                Text("Smart DL", style = MaterialTheme.typography.labelSmall)
             }
         }
     }

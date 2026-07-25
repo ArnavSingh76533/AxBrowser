@@ -1,14 +1,14 @@
 package com.akay.feature.downloads.engine
 
 import android.content.Context
+import com.yausername.youtubedl_android.YoutubeDL
+import com.yausername.youtubedl_android.YoutubeDLRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.isActive
+import kotlinx.coroutines.channels.awaitClose
 import java.io.File
-import java.io.IOException
-import kotlin.coroutines.coroutineContext
 
 class YtDlpEngine(private val context: Context) {
 
@@ -16,76 +16,88 @@ class YtDlpEngine(private val context: Context) {
         url: String,
         outputPath: String,
         formatId: String? = null
-    ): Flow<DownloadProgressUnified> = flow {
-        val binaryPath = runCatching { requireBinary() }.getOrElse { e ->
-            emit(DownloadProgressUnified.Failed(e.message ?: "Binary error"))
-            return@flow
+    ): Flow<DownloadProgressUnified> = callbackFlow {
+        val request = YoutubeDLRequest(url).apply {
+            addOption("-o", outputPath)
+            addOption("--no-playlist")
+            addOption("--retries", "3")
+            addOption("--fragment-retries", "3")
+            addOption("--no-warnings")
+            addOption("--no-check-certificates")
+
+            val format = formatId ?: "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+            addOption("-f", format)
+            addOption("--merge-output-format", "mp4")
         }
 
-        val cmd = buildList {
-            add(binaryPath)
-            add("--no-playlist")
-            add("--newline")
-            add("--no-warnings")
-            add("--no-check-certificates")
-            add("--no-part")
-            add("--retries")
-            add("3")
-            add("--fragment-retries")
-            add("3")
-            add("-o")
-            add(outputPath)
-            if (formatId != null) { add("-f"); add(formatId) }
-            add(url)
-        }
-
-        val process = try {
-            ProcessBuilder(cmd).redirectErrorStream(true).start()
-        } catch (e: IOException) {
-            emit(DownloadProgressUnified.Failed("Cannot start yt-dlp: ${e.message}"))
-            return@flow
-        } catch (e: Exception) {
-            emit(DownloadProgressUnified.Failed("Unexpected launch error: ${e.message}"))
-            return@flow
-        }
+        val processId = "ax_${System.currentTimeMillis()}"
 
         try {
-            val reader = process.inputStream.bufferedReader()
-            var line: String?
-            while (reader.readLine().also { line = it } != null) {
-                if (!coroutineContext.isActive) {
-                    process.destroy()
-                    return@flow
-                }
-                val l = line ?: continue
-                val progress = parseProgressLine(l)
-                if (progress != null) emit(progress)
+            YoutubeDL.getInstance().execute(
+                request,
+                processId
+            ) { progress, etaInSeconds, line ->
+                val etaStr = if (etaInSeconds > 0) "${etaInSeconds}s" else ""
+                trySend(
+                    DownloadProgressUnified.Running(
+                        percent       = progress,
+                        speedStr      = etaStr.ifBlank { "..." },
+                        totalBytesStr = line?.trim()?.take(40) ?: ""
+                    )
+                )
             }
-            val exitCode = process.waitFor()
-            when {
-                exitCode == 0 -> emit(DownloadProgressUnified.Completed)
-                exitCode == 1 -> emit(DownloadProgressUnified.Failed("yt-dlp error (exit 1) - URL may be geo-blocked or requires login"))
-                else -> emit(DownloadProgressUnified.Failed("yt-dlp exited with code $exitCode"))
-            }
+            trySend(DownloadProgressUnified.Completed)
+        } catch (e: com.yausername.youtubedl_android.YoutubeDLException) {
+            trySend(DownloadProgressUnified.Failed(
+                "yt-dlp error: ${e.message ?: "Unknown error"}"
+            ))
+        } catch (e: InterruptedException) {
+            trySend(DownloadProgressUnified.Failed("Download cancelled"))
         } catch (e: Exception) {
-            emit(DownloadProgressUnified.Failed("Download interrupted: ${e.message}"))
+            trySend(DownloadProgressUnified.Failed(
+                "Download failed: ${e.message ?: "Unknown error"}"
+            ))
         } finally {
-            runCatching { process.destroyForcibly() }
+            awaitClose {
+                runCatching { YoutubeDL.getInstance().destroyProcessById(processId) }
+            }
         }
     }.flowOn(Dispatchers.IO)
 
-    private fun requireBinary(): String {
-        val path = YtDlpSetup.getBinaryPath(context)
-        val file = File(path)
-        check(file.exists()) { "yt-dlp binary not found at $path - rebuild the app" }
-        check(file.length() > 1_000_000L) { "yt-dlp binary corrupted (${file.length()} bytes)" }
-        return path
-    }
+    suspend fun getInfo(url: String): VideoInfo? = runCatching {
+        val info = YoutubeDL.getInstance().getInfo(url)
+        VideoInfo(
+            title     = info.title ?: "Unknown",
+            thumbnail = info.thumbnail ?: "",
+            duration  = info.duration ?: 0.0,
+            url       = info.url ?: url
+        )
+    }.getOrNull()
 
-    private fun parseProgressLine(line: String): DownloadProgressUnified.Running? {
-        val regex = Regex("""\[download\]\s+([\d.]+)%\s+of\s+~?([\d.]+\w+)\s+at\s+([\d.]+\w+/s)""")
-        val match = regex.find(line) ?: return null
-        val percent = match.groupValues[1].toFloatOrNull() ?: return null
-        return DownloadProgressUnified.Running(percent = percent, totalBytesStr = match.groupValues[2], speedStr = match.groupValues[3])
+    fun updateYtDlp(
+        onProgress: (String) -> Unit,
+        onSuccess: () -> Unit,
+        onError: (String) -> Unit
+    ) {
+        try {
+            val status = YoutubeDL.getInstance().updateYoutubeDL(
+                context,
+                YoutubeDL.UpdateChannel.STABLE
+            )
+            when (status) {
+                YoutubeDL.UpdateStatus.DONE         -> onSuccess()
+                YoutubeDL.UpdateStatus.ALREADY_UP_TO_DATE -> onSuccess()
+                else -> onError("Update status: $status")
+            }
+        } catch (e: Exception) {
+            onError("Update failed: ${e.message}")
+        }
     }
 }
+
+data class VideoInfo(
+    val title: String,
+    val thumbnail: String,
+    val duration: Double,
+    val url: String
+)

@@ -11,7 +11,9 @@ import com.akay.feature.downloads.engine.DirectDownloadEngine
 import com.akay.feature.downloads.engine.DownloadProgressUnified
 import com.akay.feature.downloads.engine.YtDlpEngine
 import com.akay.feature.downloads.engine.YtDlpSetup
+import com.akay.feature.downloads.notification.DownloadNotificationManager
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -89,8 +91,7 @@ class DownloadViewModel @Inject constructor(
         _state.update { it.copy(ytDlpReady = installed) }
         if (!installed) {
             _state.update {
-                it.copy(setupError = "yt-dlp not found. Rebuild the app to rebundle it.\n" +
-                        "Status: ${YtDlpSetup.statusString(getApplication())}")
+                it.copy(setupError = "yt-dlp not initialized. Restart the app.")
             }
         }
     }
@@ -99,7 +100,12 @@ class DownloadViewModel @Inject constructor(
         checkYtDlp()
     }
 
-    fun enqueue(url: String, filename: String, useYtDlp: Boolean, formatId: String? = null): String {
+    fun enqueue(
+        url: String,
+        filename: String,
+        useYtDlp: Boolean = true,
+        formatId: String? = null
+    ): String {
         val id = UUID.randomUUID().toString()
         val outputFile = uniqueFile(downloadDir, filename)
         val canUseYtDlp = useYtDlp && _state.value.ytDlpReady
@@ -117,29 +123,43 @@ class DownloadViewModel @Inject constructor(
     private fun startDownload(item: DownloadItem) {
         val job = viewModelScope.launch {
             updateItem(item.id) { it.copy(status = ItemStatus.RUNNING) }
-            val ctx: android.content.Context = getApplication()
-            val flow: kotlinx.coroutines.flow.Flow<DownloadProgressUnified> = if (item.useYtDlp && _state.value.ytDlpReady) {
-                ytDlpEngine.download(item.url, item.outputPath, item.formatId)
+            val ctx: Context = getApplication()
+
+            val outputPath = if (item.useYtDlp) {
+                "${downloadDir.absolutePath}/%(title)s.%(ext)s"
+            } else {
+                item.outputPath
+            }
+
+            val flow = if (item.useYtDlp) {
+                ytDlpEngine.download(item.url, outputPath, item.formatId)
             } else {
                 directEngine.download(item.id, item.url, File(item.outputPath))
             }
+
             flow.collect { progress ->
                 when (progress) {
-                    is DownloadProgressUnified.Running -> updateItem(item.id) {
-                        it.copy(
-                            progress = progress.percent,
-                            speedStr = progress.speedStr,
-                            totalStr = progress.totalBytesStr,
-                            status = ItemStatus.RUNNING
+                    is DownloadProgressUnified.Running -> {
+                        updateItem(item.id) {
+                            it.copy(
+                                progress = progress.percent,
+                                speedStr = progress.speedStr,
+                                totalStr = progress.totalBytesStr,
+                                status   = ItemStatus.RUNNING
+                            )
+                        }
+                        DownloadNotificationManager.showProgress(
+                            ctx, item.id, item.filename,
+                            progress.percent, progress.speedStr, progress.totalBytesStr
                         )
                     }
                     DownloadProgressUnified.Completed -> {
                         updateItem(item.id) { it.copy(progress = 100f, status = ItemStatus.COMPLETED) }
-                        com.akay.feature.downloads.notification.DownloadNotificationManager.showComplete(ctx, item.id, item.filename)
+                        DownloadNotificationManager.showComplete(ctx, item.id, item.filename)
                     }
                     is DownloadProgressUnified.Failed -> {
                         updateItem(item.id) { it.copy(status = ItemStatus.FAILED, errorMsg = progress.reason) }
-                        com.akay.feature.downloads.notification.DownloadNotificationManager.showFailed(ctx, item.id, item.filename, progress.reason)
+                        DownloadNotificationManager.showFailed(ctx, item.id, item.filename, progress.reason)
                     }
                 }
             }
@@ -162,7 +182,7 @@ class DownloadViewModel @Inject constructor(
     fun cancel(id: String) {
         directEngine.cancel(id)
         downloadJobs[id]?.cancel()
-        com.akay.feature.downloads.notification.DownloadNotificationManager.cancel(getApplication(), id)
+        DownloadNotificationManager.cancel(getApplication(), id)
         updateItem(id) { it.copy(status = ItemStatus.CANCELLED) }
     }
 
@@ -176,8 +196,27 @@ class DownloadViewModel @Inject constructor(
         val item = _state.value.downloads.find { it.id == id } ?: return
         File(item.outputPath).delete()
         downloadJobs[id]?.cancel()
-        com.akay.feature.downloads.notification.DownloadNotificationManager.cancel(getApplication(), id)
+        DownloadNotificationManager.cancel(getApplication(), id)
         _state.update { it.copy(downloads = it.downloads.filter { d -> d.id != id }) }
+    }
+
+    fun updateYtDlp() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _state.update { it.copy(isSettingUpYtDlp = true, setupError = null) }
+            ytDlpEngine.updateYtDlp(
+                onProgress = { msg -> _state.update { it.copy(setupError = msg) } },
+                onSuccess  = {
+                    _state.update { it.copy(
+                        isSettingUpYtDlp = false,
+                        ytDlpReady       = true,
+                        setupError       = null
+                    )}
+                },
+                onError = { err ->
+                    _state.update { it.copy(isSettingUpYtDlp = false, setupError = err) }
+                }
+            )
+        }
     }
 
     fun openFile(id: String, context: Context) {

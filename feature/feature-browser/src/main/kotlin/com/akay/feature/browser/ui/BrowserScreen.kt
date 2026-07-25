@@ -393,9 +393,7 @@ fun BrowserScreen(
                     },
                     onDownloadWithYtDlp = { url ->
                         showMediaSheet = false
-                        val fname = url.substringAfterLast("/").substringBefore("?")
-                            .ifBlank { "video_${System.currentTimeMillis()}.mp4" }
-                        downloadViewModel.enqueue(url = url, filename = fname, useYtDlp = true)
+                        downloadViewModel.enqueue(url = url, filename = "%(title)s.%(ext)s", useYtDlp = true)
                     },
                     onDismiss = { showMediaSheet = false }
                 )
@@ -416,9 +414,7 @@ fun BrowserScreen(
                 onDownload = {
                     showPasteLinkDialog = false
                     if (pasteUrl.isNotBlank()) {
-                        val fname = pasteUrl.substringAfterLast("/").substringBefore("?")
-                            .ifBlank { "download_${System.currentTimeMillis()}" }
-                        downloadViewModel.enqueue(url = pasteUrl, filename = fname, useYtDlp = true)
+                        downloadViewModel.enqueue(url = pasteUrl, filename = "%(title)s.%(ext)s", useYtDlp = true)
                         pasteUrl = ""
                     }
                 },

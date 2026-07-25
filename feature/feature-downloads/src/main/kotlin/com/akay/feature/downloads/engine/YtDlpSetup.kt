@@ -1,31 +1,22 @@
 package com.akay.feature.downloads.engine
 
 import android.content.Context
-import java.io.File
+import com.yausername.youtubedl_android.YoutubeDL
 
 object YtDlpSetup {
 
-    fun getBinaryPath(context: Context): String =
-        "${context.applicationInfo.nativeLibraryDir}/libytdlp.so"
-
-    fun isInstalled(context: Context): Boolean {
-        val file = File(getBinaryPath(context))
-        return file.exists() && file.length() > 1_000_000L
+    fun isInstalled(context: Context): Boolean = try {
+        YoutubeDL.getInstance().version(context) != null
+    } catch (e: Exception) {
+        false
     }
 
-    fun statusString(context: Context): String {
-        val file = File(getBinaryPath(context))
-        return when {
-            !file.exists()              -> "Not found - rebuild the app"
-            file.length() < 1_000_000L -> "Corrupted (${file.length()} bytes)"
-            !file.canExecute()          -> "Not executable"
-            else                        -> "Ready (${formatSize(file.length())})"
-        }
+    fun getVersion(context: Context): String = try {
+        YoutubeDL.getInstance().version(context) ?: "Unknown"
+    } catch (e: Exception) {
+        "Not initialized"
     }
 
-    private fun formatSize(bytes: Long): String = when {
-        bytes < 1024 * 1024        -> "${bytes / 1024}KB"
-        bytes < 1024 * 1024 * 1024 -> "${"%.1f".format(bytes / (1024f * 1024f))}MB"
-        else                       -> "${"%.2f".format(bytes / (1024f * 1024f * 1024f))}GB"
-    }
+    fun statusString(context: Context): String =
+        "yt-dlp ${getVersion(context)} (youtubedl-android)"
 }

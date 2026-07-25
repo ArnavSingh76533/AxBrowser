@@ -117,12 +117,27 @@ fun SettingsScreen(
                     onCheckedChange = { viewModel.setErudaEnabled(it) }
                 )
                 val ctx = androidx.compose.ui.platform.LocalContext.current
-                Text(
-                    text = "yt-dlp: ${com.akay.feature.downloads.engine.YtDlpSetup.statusString(ctx)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (uiState.ytDlpInstalled) Color(0xFF4CAF50) else MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("yt-dlp Engine", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            text = uiState.ytDlpUpdateStatus
+                                ?: com.akay.feature.downloads.engine.YtDlpSetup.statusString(ctx),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (uiState.ytDlpInstalled) Color(0xFF4CAF50)
+                                    else MaterialTheme.colorScheme.error
+                        )
+                    }
+                    TextButton(onClick = { viewModel.updateYtDlp() }) {
+                        Text("Update")
+                    }
+                }
             }
 
             SettingsSection(title = "General") {

@@ -5,8 +5,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.akay.core.data.datastore.AxPreferences
 import com.akay.feature.downloads.engine.YtDlpSetup
+import com.yausername.youtubedl_android.YoutubeDL
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,7 +25,8 @@ data class SettingsUiState(
     val fontSize: Int = 100,
     val clearCacheOnExit: Boolean = false,
     val isErudaEnabled: Boolean = false,
-    val ytDlpInstalled: Boolean = false
+    val ytDlpInstalled: Boolean = false,
+    val ytDlpUpdateStatus: String? = null
 )
 
 @HiltViewModel
@@ -80,4 +83,31 @@ class SettingsViewModel @Inject constructor(
     fun setFontSize(size: Int) { viewModelScope.launch { preferences.setFontSize(size) } }
     fun setClearCacheOnExit(enabled: Boolean) { viewModelScope.launch { preferences.setClearCacheOnExit(enabled) } }
     fun setErudaEnabled(enabled: Boolean) { viewModelScope.launch { preferences.setErudaEnabled(enabled) } }
+
+    fun updateYtDlp() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.value = _uiState.value.copy(ytDlpUpdateStatus = "Updating...")
+            try {
+                val status = YoutubeDL.getInstance().updateYoutubeDL(
+                    context, YoutubeDL.UpdateChannel.STABLE
+                )
+                when (status) {
+                    YoutubeDL.UpdateStatus.DONE -> {
+                        _uiState.value = _uiState.value.copy(
+                            ytDlpUpdateStatus = "Updated successfully",
+                            ytDlpInstalled = true
+                        )
+                    }
+                    YoutubeDL.UpdateStatus.ALREADY_UP_TO_DATE -> {
+                        _uiState.value = _uiState.value.copy(ytDlpUpdateStatus = "Already up to date")
+                    }
+                    else -> {
+                        _uiState.value = _uiState.value.copy(ytDlpUpdateStatus = "Update status: $status")
+                    }
+                }
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(ytDlpUpdateStatus = "Update failed: ${e.message}")
+            }
+        }
+    }
 }
