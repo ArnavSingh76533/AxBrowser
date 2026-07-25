@@ -308,7 +308,7 @@ fun BrowserScreen(
                 ) {
                     AnimatedVisibility(
                         visible = mediaCount > 0,
-                        enter = scaleIn(stiffness = Spring.StiffnessMediumLow) + fadeIn(),
+                        enter = scaleIn(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeIn(),
                         exit  = scaleOut(tween(200)) + fadeOut()
                     ) {
                         Box(contentAlignment = Alignment.Center) {
