@@ -69,7 +69,7 @@ class YtDlpEngine(private val context: Context) {
         VideoInfo(
             title     = info.title ?: "Unknown",
             thumbnail = info.thumbnail ?: "",
-            duration  = info.duration ?: 0.0,
+            duration  = (info.duration ?: 0).toDouble(),
             url       = info.url ?: url
         )
     }.getOrNull()
