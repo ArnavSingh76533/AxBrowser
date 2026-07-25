@@ -3,72 +3,29 @@ package com.akay.feature.browser.ui
 import android.annotation.SuppressLint
 import android.view.ViewGroup
 import android.webkit.WebView
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.ArrowForward
-import androidx.compose.material.icons.filled.BugReport
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.Link
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.LockOpen
-import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExtendedFloatingActionButton
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SmallFloatingActionButton
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.akay.core.ui.components.AxProgressBar
 import com.akay.core.ui.theme.Primary
 import com.akay.feature.browser.devconsole.DevConsolePanel
 import com.akay.feature.browser.devconsole.NetworkInterceptor
@@ -98,101 +55,142 @@ fun BrowserScreen(
     val networkMedia by NetworkInterceptor.detectedMedia.collectAsState()
     val erudaEnabled by viewModel.erudaEnabled.collectAsState(initial = false)
     val erudaEnabledState = remember { mutableStateOf(false) }
-    LaunchedEffect(erudaEnabled) {
-        erudaEnabledState.value = erudaEnabled
-    }
+    LaunchedEffect(erudaEnabled) { erudaEnabledState.value = erudaEnabled }
     val mediaCount = uiState.detectedMediaCount + networkMedia.size
+
+    val isNewTab = uiState.url.isBlank() || uiState.url == "about:blank"
 
     Scaffold(
         topBar = {
             Column {
-                TopAppBar(
-                    title = {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surface)
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        onClick = { webView?.goBack() },
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.ArrowBack, "Back",
+                            modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.onSurface.copy(
+                                alpha = if (uiState.canGoBack) 1f else 0.3f
+                            )
+                        )
+                    }
+
+                    Surface(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 6.dp),
+                        shape = MaterialTheme.shapes.extraLarge,
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        onClick = { isEditingUrl = true }
+                    ) {
                         if (isEditingUrl) {
                             OutlinedTextField(
                                 value = uiState.displayUrl,
                                 onValueChange = { viewModel.updateUrl(it) },
                                 modifier = Modifier.fillMaxWidth(),
-                                placeholder = { Text("Search or enter URL") },
                                 singleLine = true,
-                                textStyle = MaterialTheme.typography.bodyMedium.copy(
-                                    fontFamily = FontFamily.Monospace
-                                ),
-                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                                keyboardActions = KeyboardActions(
-                                    onGo = {
-                                        viewModel.navigateToUrl(uiState.displayUrl)
-                                        isEditingUrl = false
-                                        keyboardController?.hide()
-                                    }
-                                ),
+                                placeholder = {
+                                    Text("Search or enter URL",
+                                        style = MaterialTheme.typography.bodySmall)
+                                },
                                 colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = Primary,
-                                    unfocusedBorderColor = MaterialTheme.colorScheme.surfaceVariant
-                                )
+                                    focusedBorderColor   = Color.Transparent,
+                                    unfocusedBorderColor = Color.Transparent
+                                ),
+                                textStyle = MaterialTheme.typography.bodySmall,
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                                keyboardActions = KeyboardActions(onGo = {
+                                    viewModel.navigateToUrl(uiState.displayUrl)
+                                    isEditingUrl = false
+                                    keyboardController?.hide()
+                                })
                             )
                         } else {
-                            Column(modifier = Modifier
-                                .fillMaxWidth()
-                                .background(
-                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                                    shape = MaterialTheme.shapes.extraLarge
-                                )
-                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = if (uiState.displayUrl.startsWith("https")) Icons.Default.Lock else Icons.Default.LockOpen,
-                                        contentDescription = null,
-                                        tint = if (uiState.displayUrl.startsWith("https"))
-                                            Color(0xFF4CAF50)
-                                        else MaterialTheme.colorScheme.error,
-                                        modifier = Modifier.size(12.dp)
-                                    )
-                                    Spacer(Modifier.width(4.dp))
-                                    Text(
-                                        text = prettifyUrl(uiState.displayUrl),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
+                                Icon(
+                                    imageVector = if (uiState.displayUrl.startsWith("https"))
+                                        Icons.Default.Lock else Icons.Default.LockOpen,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(11.dp),
+                                    tint = if (uiState.displayUrl.startsWith("https"))
+                                        Color(0xFF4CAF50) else MaterialTheme.colorScheme.error
+                                )
+                                Spacer(Modifier.width(5.dp))
+                                Text(
+                                    text = prettifyUrl(uiState.displayUrl),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
                         }
-                    },
-                    navigationIcon = {
-                        IconButton(onClick = { viewModel.toggleTabSwitcher() }) {
-                            Icon(Icons.Default.Menu, contentDescription = "Tabs")
-                        }
-                    },
-                    actions = {
-                        IconButton(onClick = { webView?.goBack() }) {
-                            Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                        }
-                        IconButton(onClick = { webView?.goForward() }) {
-                            Icon(Icons.Default.ArrowForward, contentDescription = "Forward")
-                        }
-                        IconButton(onClick = { webView?.reload() }) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Refresh")
-                        }
-                        IconButton(onClick = { viewModel.toggleDevConsole() }) {
-                            Icon(Icons.Default.BugReport, contentDescription = "Dev Console")
-                        }
-                        IconButton(onClick = { isEditingUrl = !isEditingUrl }) {
+                    }
+
+                    IconButton(
+                        onClick = { webView?.goForward() },
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.ArrowForward, "Forward",
+                            modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.onSurface.copy(
+                                alpha = if (uiState.canGoForward) 1f else 0.3f
+                            )
+                        )
+                    }
+
+                    IconButton(
+                        onClick = {
+                            if (uiState.isLoading) webView?.stopLoading() else webView?.reload()
+                        },
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Crossfade(targetState = uiState.isLoading, label = "refresh") { loading ->
                             Icon(
-                                if (isEditingUrl) Icons.Default.Close else Icons.Default.Search,
-                                contentDescription = if (isEditingUrl) "Close" else "Search"
+                                if (loading) Icons.Default.Close else Icons.Default.Refresh,
+                                null, modifier = Modifier.size(20.dp)
                             )
                         }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surface
+                    }
+
+                    IconButton(
+                        onClick = { viewModel.toggleTabSwitcher() },
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(Icons.Default.Menu, "Menu", modifier = Modifier.size(20.dp))
+                    }
+                }
+
+                AnimatedVisibility(
+                    visible = uiState.isLoading,
+                    enter = fadeIn(tween(100)),
+                    exit  = fadeOut(tween(300))
+                ) {
+                    val animatedProgress by animateFloatAsState(
+                        targetValue = uiState.progress / 100f,
+                        animationSpec = tween(200),
+                        label = "progress"
                     )
-                )
-                AxProgressBar(
-                    progress = uiState.progress / 100f,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                    LinearProgressIndicator(
+                        progress = { animatedProgress },
+                        modifier = Modifier.fillMaxWidth().height(2.dp),
+                        color = Primary,
+                        trackColor = Color.Transparent
+                    )
+                }
             }
         }
     ) { paddingValues ->
@@ -201,74 +199,90 @@ fun BrowserScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            AndroidView(
-                factory = { ctx ->
-                    WebView(ctx).apply {
-                        layoutParams = ViewGroup.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.MATCH_PARENT
-                        )
-                        settings.javaScriptEnabled = true
-                        settings.domStorageEnabled = true
-                        settings.mediaPlaybackRequiresUserGesture = false
-                        settings.useWideViewPort = true
-                        settings.loadWithOverviewMode = true
-                        settings.builtInZoomControls = true
-                        settings.displayZoomControls = false
-                        setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+            if (isNewTab) {
+                NewTabPage(onSearch = { viewModel.navigateToUrl(it) })
+            } else {
+                AndroidView(
+                    factory = { ctx ->
+                        WebView(ctx).apply {
+                            layoutParams = ViewGroup.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.MATCH_PARENT
+                            )
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            settings.mediaPlaybackRequiresUserGesture = false
+                            settings.useWideViewPort = true
+                            settings.loadWithOverviewMode = true
+                            settings.builtInZoomControls = true
+                            settings.displayZoomControls = false
+                            setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
 
-                        webViewClient = AxWebViewClient(
-                            context = ctx,
-                            onPageStarted = { url -> viewModel.updateUrl(url) },
-                            onPageFinished = { url, title ->
-                                viewModel.updateProgress(100)
-                                title?.let { viewModel.updateTitle(it) }
-                                if (url.isNotBlank() && url != "about:blank") {
-                                    viewModel.recordHistory(url, title ?: url)
-                                }
-                                if (erudaEnabledState.value) {
-                                    val js = runCatching {
-                                        ctx.assets.open("js/eruda_init.js").bufferedReader().readText()
+                            webViewClient = AxWebViewClient(
+                                context = ctx,
+                                onPageStarted = { url ->
+                                    viewModel.updateUrl(url)
+                                    viewModel.updateNavigationState(
+                                        isLoading = true,
+                                        canGoBack = canGoBack(),
+                                        canGoForward = canGoForward()
+                                    )
+                                },
+                                onPageFinished = { url, title ->
+                                    viewModel.updateProgress(100)
+                                    viewModel.updateNavigationState(
+                                        isLoading = false,
+                                        canGoBack = canGoBack(),
+                                        canGoForward = canGoForward()
+                                    )
+                                    title?.let { viewModel.updateTitle(it) }
+                                    if (url.isNotBlank() && url != "about:blank") {
+                                        viewModel.recordHistory(url, title ?: url)
+                                    }
+                                    if (erudaEnabledState.value) {
+                                        val js = runCatching {
+                                            ctx.assets.open("js/eruda_init.js").bufferedReader().readText()
+                                        }.getOrNull()
+                                        js?.let { evaluateJavascript(it, null) }
+                                    }
+                                    val scanJs = runCatching {
+                                        ctx.assets.open("js/media_scanner.js").bufferedReader().readText()
                                     }.getOrNull()
-                                    js?.let { evaluateJavascript(it, null) }
-                                }
-                                val scanJs = runCatching {
-                                    ctx.assets.open("js/media_scanner.js").bufferedReader().readText()
-                                }.getOrNull()
-                                scanJs?.let { script ->
-                                    evaluateJavascript(script) { result ->
-                                        if (!result.isNullOrEmpty() && result != "null") {
-                                            parseAndReportDomMedia(result)
+                                    scanJs?.let { script ->
+                                        evaluateJavascript(script) { result ->
+                                            if (!result.isNullOrEmpty() && result != "null") {
+                                                parseAndReportDomMedia(result)
+                                            }
                                         }
                                     }
+                                },
+                                onError = { viewModel.updateTitle("Error") },
+                                onMediaDetected = { url, mime ->
+                                    NetworkInterceptor.onRequest(
+                                        com.akay.feature.browser.devconsole.NetworkRequest(url = url, mimeType = mime)
+                                    )
                                 }
-                            },
-                            onError = { viewModel.updateTitle("Error") },
-                            onMediaDetected = { url, mime ->
-                                NetworkInterceptor.onRequest(
-                                    com.akay.feature.browser.devconsole.NetworkRequest(url = url, mimeType = mime)
-                                )
-                            }
-                        )
+                            )
 
-                        webChromeClient = AxWebChromeClient(
-                            onProgressChange = { viewModel.updateProgress(it) },
-                            onTitleChange = { viewModel.updateTitle(it) },
-                            onUrlChange = { }
-                        )
+                            webChromeClient = AxWebChromeClient(
+                                onProgressChange = { viewModel.updateProgress(it) },
+                                onTitleChange = { viewModel.updateTitle(it) },
+                                onUrlChange = { }
+                            )
 
-                        webView = this
-                        loadUrl(uiState.url)
-                    }
-                },
-                update = { wv ->
-                    if (uiState.url.isNotEmpty() && uiState.url != lastNavigatedUrl) {
-                        lastNavigatedUrl = uiState.url
-                        wv.loadUrl(uiState.url)
-                    }
-                },
-                modifier = Modifier.fillMaxSize()
-            )
+                            webView = this
+                            loadUrl(uiState.url)
+                        }
+                    },
+                    update = { wv ->
+                        if (uiState.url.isNotEmpty() && uiState.url != lastNavigatedUrl) {
+                            lastNavigatedUrl = uiState.url
+                            wv.loadUrl(uiState.url)
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
 
             AnimatedVisibility(
                 visible = uiState.showTabSwitcher,
@@ -285,7 +299,7 @@ fun BrowserScreen(
                 )
             }
 
-            if (!uiState.showTabSwitcher) {
+            if (!uiState.showTabSwitcher && !isNewTab) {
                 Column(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
@@ -294,18 +308,44 @@ fun BrowserScreen(
                 ) {
                     AnimatedVisibility(
                         visible = mediaCount > 0,
-                        enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
-                        exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
+                        enter = scaleIn(stiffness = Spring.StiffnessMediumLow) + fadeIn(),
+                        exit  = scaleOut(tween(200)) + fadeOut()
                     ) {
-                        ExtendedFloatingActionButton(
-                            onClick = { showMediaSheet = true },
-                            containerColor = Primary,
-                            contentColor = Color.White,
-                            icon = { Icon(Icons.Default.Download, contentDescription = null) },
-                            text = {
-                                Text(text = if (mediaCount == 1) "1 media" else "$mediaCount media")
-                            }
-                        )
+                        Box(contentAlignment = Alignment.Center) {
+                            val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+                            val pulseScale by infiniteTransition.animateFloat(
+                                initialValue = 1f, targetValue = 1.25f,
+                                animationSpec = infiniteRepeatable(
+                                    animation  = tween(900, easing = EaseInOut),
+                                    repeatMode = RepeatMode.Reverse
+                                ), label = "ring"
+                            )
+                            val pulseAlpha by infiniteTransition.animateFloat(
+                                initialValue = 0.4f, targetValue = 0f,
+                                animationSpec = infiniteRepeatable(
+                                    animation  = tween(900),
+                                    repeatMode = RepeatMode.Reverse
+                                ), label = "ringAlpha"
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(56.dp)
+                                    .scale(pulseScale)
+                                    .background(Primary.copy(alpha = pulseAlpha), CircleShape)
+                            )
+                            ExtendedFloatingActionButton(
+                                onClick = { showMediaSheet = true },
+                                containerColor = Primary,
+                                contentColor = Color.White,
+                                icon = { Icon(Icons.Default.Download, null) },
+                                text = {
+                                    Text(
+                                        if (mediaCount == 1) "1 media" else "$mediaCount media",
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            )
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(8.dp))
@@ -315,7 +355,8 @@ fun BrowserScreen(
                         containerColor = MaterialTheme.colorScheme.secondaryContainer,
                         shape = CircleShape
                     ) {
-                        Icon(Icons.Default.Link, contentDescription = "Paste Link", tint = MaterialTheme.colorScheme.primary)
+                        Icon(Icons.Default.Link, "Paste Link",
+                            tint = MaterialTheme.colorScheme.primary)
                     }
 
                     Spacer(modifier = Modifier.height(8.dp))
@@ -325,7 +366,8 @@ fun BrowserScreen(
                         containerColor = MaterialTheme.colorScheme.surfaceVariant,
                         shape = CircleShape
                     ) {
-                        Icon(Icons.Default.Add, contentDescription = "New Tab", tint = MaterialTheme.colorScheme.onSurface)
+                        Icon(Icons.Default.Add, "New Tab",
+                            tint = MaterialTheme.colorScheme.onSurface)
                     }
                 }
             }
@@ -374,7 +416,8 @@ fun BrowserScreen(
                 onDownload = {
                     showPasteLinkDialog = false
                     if (pasteUrl.isNotBlank()) {
-                        val fname = pasteUrl.substringAfterLast("/").substringBefore("?").ifBlank { "download_${System.currentTimeMillis()}" }
+                        val fname = pasteUrl.substringAfterLast("/").substringBefore("?")
+                            .ifBlank { "download_${System.currentTimeMillis()}" }
                         downloadViewModel.enqueue(url = pasteUrl, filename = fname, useYtDlp = true)
                         pasteUrl = ""
                     }
@@ -399,7 +442,9 @@ fun PasteLinkDialog(
         title = { Text("Paste Link") },
         text = {
             Column {
-                Text("Enter a URL to open or download", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Enter a URL to open or download",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(modifier = Modifier.height(12.dp))
                 OutlinedTextField(
                     value = url,
@@ -408,7 +453,10 @@ fun PasteLinkDialog(
                     placeholder = { Text("https://...") },
                     singleLine = true,
                     textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Primary, unfocusedBorderColor = MaterialTheme.colorScheme.surfaceVariant)
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Primary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
                 )
             }
         },

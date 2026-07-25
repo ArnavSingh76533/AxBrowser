@@ -20,6 +20,8 @@ data class BrowserUiState(
     val tabs: List<Tab> = emptyList(),
     val activeTab: Tab? = null,
     val isLoading: Boolean = false,
+    val canGoBack: Boolean = false,
+    val canGoForward: Boolean = false,
     val url: String = "",
     val displayUrl: String = "",
     val title: String = "",
@@ -112,6 +114,14 @@ class BrowserViewModel @Inject constructor(
 
     fun updateProgress(progress: Int) {
         _uiState.value = _uiState.value.copy(progress = progress)
+    }
+
+    fun updateNavigationState(isLoading: Boolean, canGoBack: Boolean, canGoForward: Boolean) {
+        _uiState.value = _uiState.value.copy(
+            isLoading = isLoading,
+            canGoBack = canGoBack,
+            canGoForward = canGoForward
+        )
     }
 
     fun navigateToUrl(url: String) {

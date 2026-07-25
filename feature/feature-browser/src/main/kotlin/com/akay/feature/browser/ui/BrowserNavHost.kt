@@ -1,16 +1,25 @@
 package com.akay.feature.browser.ui
 
 import android.net.Uri
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.*
 import androidx.navigation.compose.*
+import com.akay.core.ui.theme.Primary
 import com.akay.feature.bookmarks.ui.BookmarkScreen
 import com.akay.feature.downloads.ui.DownloadManagerScreen
 import com.akay.feature.downloads.viewmodel.DownloadViewModel
@@ -40,19 +49,53 @@ fun BrowserNavHost() {
     Scaffold(
         bottomBar = {
             if (showBottomBar) {
-                NavigationBar {
+                NavigationBar(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 0.dp,
+                    modifier = Modifier.background(
+                        Brush.verticalGradient(
+                            colors = listOf(Color.Transparent, MaterialTheme.colorScheme.surface),
+                            startY = 0f, endY = Float.POSITIVE_INFINITY
+                        )
+                    )
+                ) {
                     bottomNavItems.forEach { item ->
+                        val selected = currentRoute == item.route
+                        val iconScale by animateFloatAsState(
+                            targetValue   = if (selected) 1.15f else 1f,
+                            animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+                            label         = "iconScale_${item.route}"
+                        )
                         NavigationBarItem(
-                            selected = currentRoute == item.route,
+                            selected = selected,
                             onClick = {
                                 navController.navigate(item.route) {
                                     popUpTo(navController.graph.startDestinationId) { saveState = true }
                                     launchSingleTop = true
-                                    restoreState = true
+                                    restoreState    = true
                                 }
                             },
-                            icon = { Icon(item.icon, contentDescription = item.label) },
-                            label = { Text(item.label) }
+                            icon = {
+                                Icon(item.icon, contentDescription = item.label,
+                                    modifier = Modifier.scale(iconScale))
+                            },
+                            label = {
+                                AnimatedVisibility(
+                                    visible = selected,
+                                    enter = fadeIn(tween(200)) + expandHorizontally(),
+                                    exit  = fadeOut(tween(100)) + shrinkHorizontally()
+                                ) {
+                                    Text(item.label,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1)
+                                }
+                            },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor   = Primary,
+                                selectedTextColor   = Primary,
+                                indicatorColor      = Primary.copy(alpha = 0.12f),
+                                unselectedIconColor = MaterialTheme.colorScheme.onSurface.copy(0.5f)
+                            )
                         )
                     }
                 }
@@ -60,9 +103,21 @@ fun BrowserNavHost() {
         }
     ) { innerPadding ->
         NavHost(
-            navController = navController,
+            navController    = navController,
             startDestination = NavRoute.Browser.route,
-            modifier = Modifier.padding(innerPadding)
+            modifier         = Modifier.padding(innerPadding),
+            enterTransition  = {
+                slideInHorizontally(tween(280)) { it / 5 } + fadeIn(tween(280))
+            },
+            exitTransition   = {
+                slideOutHorizontally(tween(280)) { -it / 5 } + fadeOut(tween(280))
+            },
+            popEnterTransition  = {
+                slideInHorizontally(tween(280)) { -it / 5 } + fadeIn(tween(280))
+            },
+            popExitTransition   = {
+                slideOutHorizontally(tween(280)) { it / 5 } + fadeOut(tween(280))
+            }
         ) {
             composable(NavRoute.Browser.route) {
                 BrowserScreen(downloadViewModel = downloadViewModel)

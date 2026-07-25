@@ -1,6 +1,8 @@
 package com.akay.feature.downloads.ui
 
 import android.content.Context
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +18,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AudioFile
@@ -31,9 +34,6 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.akay.core.ui.theme.Glass
 import com.akay.core.ui.theme.GlassStroke
+import com.akay.core.ui.theme.Primary
 import com.akay.feature.downloads.viewmodel.DownloadItem
 import com.akay.feature.downloads.viewmodel.DownloadViewModel
 import com.akay.feature.downloads.viewmodel.ItemStatus
@@ -97,11 +98,18 @@ fun DownloadManagerScreen(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
                 ) {
                     Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Warning, null, tint = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.size(20.dp))
+                        Icon(Icons.Default.Warning, null,
+                            tint = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.size(20.dp))
                         Spacer(Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("yt-dlp not available", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onErrorContainer)
-                            Text(state.setupError ?: "Rebuild the app to rebundle yt-dlp.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.8f))
+                            Text("yt-dlp not available",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onErrorContainer)
+                            Text(state.setupError ?: "Rebuild the app to rebundle yt-dlp.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.8f))
                         }
                         Spacer(Modifier.width(8.dp))
                         TextButton(onClick = { viewModel.retryYtDlpCheck() }) {
@@ -140,16 +148,21 @@ fun DownloadManagerScreen(
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         items(list, key = { it.id }) { item ->
-                            DownloadCard(
-                                item = item,
-                                onPause = { viewModel.pause(it) },
-                                onResume = { viewModel.resume(it) },
-                                onCancel = { viewModel.cancel(it) },
-                                onRetry = { viewModel.retry(it) },
-                                onDelete = { viewModel.delete(it) },
-                                onOpen = { viewModel.openFile(it, context) },
-                                onShare = { viewModel.shareFile(it, context) }
-                            )
+                            AnimatedVisibility(
+                                visible = true,
+                                enter = fadeIn(tween(300)) + slideInVertically(tween(300)) { it / 2 }
+                            ) {
+                                DownloadCard(
+                                    item = item,
+                                    onPause = { viewModel.pause(it) },
+                                    onResume = { viewModel.resume(it) },
+                                    onCancel = { viewModel.cancel(it) },
+                                    onRetry = { viewModel.retry(it) },
+                                    onDelete = { viewModel.delete(it) },
+                                    onOpen = { viewModel.openFile(it, context) },
+                                    onShare = { viewModel.shareFile(it, context) }
+                                )
+                            }
                         }
                     }
                 }
@@ -219,19 +232,35 @@ fun DownloadCard(
             }
 
             if (item.status == ItemStatus.RUNNING || item.status == ItemStatus.PAUSED) {
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(10.dp))
+                val animatedProgress by animateFloatAsState(
+                    targetValue   = item.progress / 100f,
+                    animationSpec = tween(500, easing = LinearEasing),
+                    label         = "progress_${item.id}"
+                )
                 LinearProgressIndicator(
-                    progress = { item.progress / 100f },
-                    modifier = Modifier.fillMaxWidth().height(6.dp).clip(MaterialTheme.shapes.small),
-                    color = if (item.status == ItemStatus.PAUSED) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary,
-                    trackColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                    progress      = { animatedProgress },
+                    modifier      = Modifier
+                        .fillMaxWidth()
+                        .height(5.dp)
+                        .clip(CircleShape),
+                    color         = if (item.status == ItemStatus.PAUSED)
+                                        MaterialTheme.colorScheme.secondary
+                                    else Primary,
+                    trackColor    = MaterialTheme.colorScheme.surfaceVariant.copy(0.25f)
                 )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = "${"%.1f".format(item.progress)}%",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("${"%.1f".format(item.progress)}%",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (item.speedStr.isNotBlank())
+                        Text(item.speedStr,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
 
             Spacer(Modifier.height(12.dp))

@@ -24,90 +24,92 @@ android {
 }
 
 tasks.register("downloadYtDlpBinaries") {
-    val arm64File = layout.projectDirectory.file("src/main/jniLibs/arm64-v8a/libytdlp.so").asFile
-    val x86File   = layout.projectDirectory.file("src/main/jniLibs/x86_64/libytdlp.so").asFile
-
     doLast {
-        fun downloadWithRedirects(urlStr: String, destFile: File): Boolean {
+        fun downloadBinary(urlStr: String, destFile: File): Boolean {
             var currentUrl = urlStr
-            var redirects = 0
-            val maxRedirects = 10
-            while (redirects <= maxRedirects) {
-                val connection = URL(currentUrl).openConnection() as HttpURLConnection
+            repeat(15) { hop ->
+                val conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
+                    instanceFollowRedirects = false
+                    connectTimeout = 30_000
+                    readTimeout    = 600_000
+                    setRequestProperty("User-Agent", "AxBrowser-Gradle/1.0")
+                    setRequestProperty("Accept", "*/*")
+                }
                 try {
-                    connection.instanceFollowRedirects = false
-                    connection.connectTimeout = 30_000
-                    connection.readTimeout = 300_000
-                    connection.setRequestProperty("User-Agent", "AxBrowser-Build/1.0")
-                    connection.connect()
-                    val code = connection.responseCode
+                    val code = conn.responseCode
                     when (code) {
                         200 -> {
-                            connection.inputStream.use { input ->
-                                destFile.outputStream().use { output -> input.copyTo(output) }
-                            }
-                            val size = destFile.length()
-                            if (size < 1_000_000L) {
-                                println("  File too small: $size bytes")
+                            destFile.parentFile.mkdirs()
+                            conn.inputStream.use { inp -> destFile.outputStream().use { inp.copyTo(it) } }
+                            val mb = destFile.length() / (1024 * 1024)
+                            if (destFile.length() < 5_000_000L) {
+                                println("  File too small: ${destFile.length()} bytes")
                                 destFile.delete()
                                 return false
                             }
-                            println("  Downloaded ${size / (1024 * 1024)}MB")
+                            println("  Downloaded ${mb}MB")
                             return true
                         }
                         301, 302, 303, 307, 308 -> {
-                            val location = connection.getHeaderField("Location")
-                            if (location.isNullOrBlank()) return false
-                            currentUrl = if (location.startsWith("http")) location else "https://github.com$location"
-                            redirects++
-                            println("  Redirect $redirects -> $currentUrl")
+                            val loc = conn.getHeaderField("Location") ?: return false
+                            currentUrl = if (loc.startsWith("http")) loc else "https://github.com$loc"
+                            println("  Redirect $hop -> $currentUrl")
                         }
                         else -> {
-                            println("  HTTP $code from $currentUrl")
-                            return false
+                            println("  HTTP $code"); return false
                         }
                     }
+                } catch (e: Exception) {
+                    println("  Exception: ${e.message}")
+                    destFile.deleteRecursively()
+                    return false
                 } finally {
-                    connection.disconnect()
+                    conn.disconnect()
                 }
             }
             return false
         }
 
-        arm64File.parentFile.mkdirs()
-        x86File.parentFile.mkdirs()
+        val arm64 = file("src/main/jniLibs/arm64-v8a/libytdlp.so")
+        val x86   = file("src/main/jniLibs/x86_64/libytdlp.so")
 
-        if (!arm64File.exists() || arm64File.length() < 1_000_000L) {
-            arm64File.delete()
-            println("\nDownloading yt-dlp ARM64...")
+        if (!arm64.exists() || arm64.length() < 5_000_000L) {
+            arm64.delete()
+            println("\nDownloading yt-dlp for ARM64 Android...")
             val arm64Urls = listOf(
+                "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_android",
                 "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux_aarch64",
                 "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux"
             )
             var arm64Ok = false
             for (url in arm64Urls) {
-                println("  Trying $url ...")
-                if (downloadWithRedirects(url, arm64File)) { arm64Ok = true; break }
-                arm64File.delete()
+                println("  Trying: $url")
+                if (downloadBinary(url, arm64)) { arm64Ok = true; break }
+                arm64.delete()
             }
             if (!arm64Ok) {
                 error("FATAL: Failed to download yt-dlp ARM64 binary.")
             }
         } else {
-            println("arm64 yt-dlp already present (${arm64File.length() / (1024*1024)}MB)")
+            println("ARM64 yt-dlp present (${arm64.length() / (1024*1024)}MB)")
         }
 
-        if (!x86File.exists() || x86File.length() < 1_000_000L) {
-            x86File.delete()
-            println("\nDownloading yt-dlp x86_64...")
-            val ok = downloadWithRedirects(
+        if (!x86.exists() || x86.length() < 5_000_000L) {
+            x86.delete()
+            println("\nDownloading yt-dlp for x86_64...")
+            val ok = downloadBinary(
                 "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux",
-                x86File
+                x86
             )
             if (!ok) println("Warning: x86_64 binary download failed (optional)")
         } else {
-            println("x86_64 yt-dlp already present (${x86File.length() / (1024*1024)}MB)")
+            println("x86_64 yt-dlp present (${x86.length() / (1024*1024)}MB)")
         }
+
+        println("\n--- jniLibs contents ---")
+        println("  arm64-v8a/libytdlp.so : ${if (arm64.exists()) "${arm64.length() / (1024*1024)}MB" else "MISSING"}")
+        println("  x86_64/libytdlp.so    : ${if (x86.exists()) "${x86.length() / (1024*1024)}MB" else "MISSING (optional)"}")
+        println("------------------------\n")
     }
 }
 
