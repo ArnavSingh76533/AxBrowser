@@ -41,7 +41,8 @@ data class SettingsUiState(
     val isErudaEnabled: Boolean = false,
     val ytDlpInstalled: Boolean = false,
     val ytDlpUpdateStatus: String? = null,
-    val searchEngineUrl: String = SEARCH_ENGINES.first().url
+    val searchEngineUrl: String = SEARCH_ENGINES.first().url,
+    val customHeaders: String = ""
 ) {
     val searchEngineName: String
         get() = SEARCH_ENGINES.firstOrNull { it.url == searchEngineUrl }?.name ?: "Custom"
@@ -92,6 +93,9 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             preferences.searchEngine.collect { _uiState.value = _uiState.value.copy(searchEngineUrl = it) }
         }
+        viewModelScope.launch {
+            preferences.customHeaders.collect { _uiState.value = _uiState.value.copy(customHeaders = it) }
+        }
         _uiState.value = _uiState.value.copy(
             ytDlpInstalled = YtDlpSetup.isInstalled(context)
         )
@@ -106,6 +110,7 @@ class SettingsViewModel @Inject constructor(
     fun setClearCacheOnExit(enabled: Boolean) { viewModelScope.launch { preferences.setClearCacheOnExit(enabled) } }
     fun setErudaEnabled(enabled: Boolean) { viewModelScope.launch { preferences.setErudaEnabled(enabled) } }
     fun setSearchEngine(url: String) { viewModelScope.launch { preferences.setSearchEngine(url) } }
+    fun setCustomHeaders(headers: String) { viewModelScope.launch { preferences.setCustomHeaders(headers) } }
 
     fun clearBrowsingData(
         clearHistory: Boolean,

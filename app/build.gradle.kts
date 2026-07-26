@@ -9,6 +9,17 @@ plugins {
 android {
     namespace = "com.akay.axbrowser"
 
+    defaultConfig {
+        // The yt-dlp + ffmpeg native libraries ship x86/x86_64/arm variants.
+        // Real Android devices are ARM, so dropping the x86 ABIs roughly halves
+        // the packaged native libs without removing any feature.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
+        // App is English-only; drop other locales pulled in by libraries.
+        resourceConfigurations += listOf("en")
+    }
+
     compileOptions {
         isCoreLibraryDesugaringEnabled = true
     }
@@ -16,6 +27,15 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
+        }
+        resources {
+            excludes += setOf(
+                "/META-INF/{AL2.0,LGPL2.1}",
+                "/META-INF/*.version",
+                "/META-INF/*.kotlin_module",
+                "DebugProbesKt.bin",
+                "kotlin-tooling-metadata.json"
+            )
         }
     }
 }

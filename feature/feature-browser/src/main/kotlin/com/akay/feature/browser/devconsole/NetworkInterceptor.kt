@@ -17,7 +17,10 @@ data class NetworkRequest(
     val sizeBytes: Long = 0L,
     val durationMs: Long = 0L,
     val startTime: Long = System.currentTimeMillis(),
-    val isBlocked: Boolean = false
+    val isBlocked: Boolean = false,
+    val requestBody: String = "",
+    val responseBody: String = "",
+    val source: String = "webview"
 ) {
     val isMedia: Boolean
         get() {
@@ -31,6 +34,20 @@ data class NetworkRequest(
                 || audioExts.any { lowerUrl.contains(it) }
                 || mediaTypes.any { contentType.contains(it) }
         }
+
+    /** Builds a runnable curl command reproducing this request. */
+    fun toCurl(): String {
+        val sb = StringBuilder("curl")
+        if (!method.equals("GET", ignoreCase = true)) sb.append(" -X ").append(method)
+        sb.append(" '").append(url).append("'")
+        requestHeaders.forEach { (k, v) ->
+            sb.append(" \\\n  -H '").append(k).append(": ").append(v.replace("'", "'\\''")).append("'")
+        }
+        if (requestBody.isNotBlank()) {
+            sb.append(" \\\n  --data-raw '").append(requestBody.replace("'", "'\\''")).append("'")
+        }
+        return sb.toString()
+    }
 }
 
 data class DetectedMedia(
@@ -49,6 +66,9 @@ object NetworkInterceptor {
     private val _detectedMedia = MutableStateFlow<List<DetectedMedia>>(emptyList())
     val detectedMedia: StateFlow<List<DetectedMedia>> = _detectedMedia.asStateFlow()
 
+    private val _blockRules = MutableStateFlow<List<String>>(emptyList())
+    val blockRules: StateFlow<List<String>> = _blockRules.asStateFlow()
+
     private const val MAX_ENTRIES = 500
     private val seenMediaUrls = mutableSetOf<String>()
 
@@ -57,21 +77,48 @@ object NetworkInterceptor {
             val updated = current + request
             if (updated.size > MAX_ENTRIES) updated.drop(updated.size - MAX_ENTRIES) else updated
         }
-        if (request.isMedia && !seenMediaUrls.contains(request.url)) {
-            seenMediaUrls.add(request.url)
-            val filename = request.url.substringAfterLast("/").substringBefore("?")
-                .ifBlank { "media_${System.currentTimeMillis()}" }
-            val isVideo = request.mimeType?.startsWith("video") == true
-                || listOf(".mp4", ".webm", ".mkv", ".avi", ".mov", ".m3u8", ".mpd", ".ts").any { request.url.lowercase().contains(it) }
+        maybeAddMedia(request.url, request.mimeType)
+    }
 
-            val media = DetectedMedia(
-                url = request.url,
-                filename = filename,
-                mimeType = request.mimeType,
-                isVideo = isVideo,
-                source = "network"
-            )
-            _detectedMedia.update { it + media }
+    /** Feeds a request/response captured by the in-page JS bridge (fetch/XHR). */
+    fun onCapturedRequest(
+        url: String,
+        method: String,
+        status: Int?,
+        requestBody: String,
+        responseBody: String,
+        responseHeaders: Map<String, String>,
+        mimeType: String?,
+        durationMs: Long,
+        source: String
+    ) {
+        val req = NetworkRequest(
+            url = url,
+            method = method,
+            responseStatus = status,
+            responseHeaders = responseHeaders,
+            mimeType = mimeType,
+            durationMs = durationMs,
+            requestBody = requestBody,
+            responseBody = responseBody,
+            source = source
+        )
+        _requests.update { current ->
+            val updated = current + req
+            if (updated.size > MAX_ENTRIES) updated.drop(updated.size - MAX_ENTRIES) else updated
+        }
+        maybeAddMedia(url, mimeType)
+    }
+
+    private fun maybeAddMedia(url: String, mimeType: String?) {
+        val fake = NetworkRequest(url = url, mimeType = mimeType)
+        if (fake.isMedia && !seenMediaUrls.contains(url)) {
+            seenMediaUrls.add(url)
+            val filename = url.substringAfterLast("/").substringBefore("?")
+                .ifBlank { "media_${System.currentTimeMillis()}" }
+            val isVideo = mimeType?.startsWith("video") == true
+                || listOf(".mp4", ".webm", ".mkv", ".avi", ".mov", ".m3u8", ".mpd", ".ts").any { url.lowercase().contains(it) }
+            _detectedMedia.update { it + DetectedMedia(url = url, filename = filename, mimeType = mimeType, isVideo = isVideo, source = "network") }
         }
     }
 
@@ -96,14 +143,7 @@ object NetworkInterceptor {
         val isVideo = type == "video" || type == "source"
             || listOf(".mp4", ".webm", ".mkv", ".avi", ".mov", ".m3u8").any { url.lowercase().contains(it) }
 
-        val media = DetectedMedia(
-            url = url,
-            filename = filename,
-            mimeType = null,
-            isVideo = isVideo,
-            source = "dom"
-        )
-        _detectedMedia.update { it + media }
+        _detectedMedia.update { it + DetectedMedia(url = url, filename = filename, mimeType = null, isVideo = isVideo, source = "dom") }
     }
 
     fun clearDetectedMedia() {
@@ -121,4 +161,28 @@ object NetworkInterceptor {
             list.map { if (it.url == url) it.copy(isBlocked = true) else it }
         }
     }
+
+    // --- Interceptor: user-defined runtime block rules ---
+
+    fun addBlockRule(pattern: String) {
+        val p = pattern.trim()
+        if (p.isEmpty()) return
+        _blockRules.update { if (it.contains(p)) it else it + p }
+    }
+
+    fun removeBlockRule(pattern: String) {
+        _blockRules.update { it.filterNot { r -> r == pattern } }
+    }
+
+    /** True if the URL matches any user block rule (substring match). */
+    fun isUserBlocked(url: String): Boolean {
+        val rules = _blockRules.value
+        if (rules.isEmpty()) return false
+        val lower = url.lowercase()
+        return rules.any { lower.contains(it.lowercase()) }
+    }
+
+    /** Suggests a concise block pattern (host) for a URL. */
+    fun suggestRule(url: String): String =
+        runCatching { java.net.URI(url).host ?: url }.getOrDefault(url)
 }

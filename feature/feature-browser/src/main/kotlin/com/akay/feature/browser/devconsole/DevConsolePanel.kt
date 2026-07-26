@@ -1,31 +1,42 @@
 package com.akay.feature.browser.devconsole
 
-import androidx.compose.animation.*
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.BugReport
-import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+
+private enum class NetFilter(val label: String) {
+    ALL("All"), XHR("XHR/Fetch"), JS("JS"), CSS("CSS"), IMG("Img"), MEDIA("Media"), DOC("Doc"), BLOCKED("Blocked")
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -36,9 +47,10 @@ fun DevConsolePanel(
     onDismiss: () -> Unit
 ) {
     val requests by NetworkInterceptor.requests.collectAsState()
+    val blockRules by NetworkInterceptor.blockRules.collectAsState()
     var selectedTab by remember { mutableIntStateOf(0) }
     var selectedRequest by remember { mutableStateOf<NetworkRequest?>(null) }
-    val tabs = listOf("Network (${requests.size})", "Console", "Elements", "Info")
+    val tabs = listOf("Network (${requests.size})", "Rules (${blockRules.size})", "Elements", "Info")
 
     if (isVisible) {
         ModalBottomSheet(
@@ -52,15 +64,13 @@ fun DevConsolePanel(
                 ) {
                     Icon(Icons.Default.BugReport, null, tint = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.width(8.dp))
-                    Text("Dev Console", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    Text("Network Inspector", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                     if (selectedTab == 0) {
                         IconButton(onClick = { NetworkInterceptor.clear() }) {
                             Icon(Icons.Default.DeleteSweep, "Clear")
                         }
                     }
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, "Close")
-                    }
+                    IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, "Close") }
                 }
 
                 ScrollableTabRow(
@@ -79,9 +89,9 @@ fun DevConsolePanel(
 
                 when (selectedTab) {
                     0 -> NetworkTab(requests = requests, onSelectRequest = { selectedRequest = it })
-                    1 -> ConsoleTab()
+                    1 -> RulesTab(rules = blockRules)
                     2 -> ElementsTab(html = currentPageHtml)
-                    3 -> InfoTab(url = currentPageUrl, requestCount = requests.size)
+                    3 -> InfoTab(url = currentPageUrl, requestCount = requests.size, ruleCount = blockRules.size)
                 }
             }
 
@@ -92,12 +102,68 @@ fun DevConsolePanel(
     }
 }
 
+private fun classify(req: NetworkRequest): NetFilter {
+    if (req.isBlocked) return NetFilter.BLOCKED
+    val u = req.url.lowercase()
+    val ct = req.mimeType?.lowercase() ?: ""
+    return when {
+        req.isMedia -> NetFilter.MEDIA
+        req.source == "xhr" || req.source == "fetch" || ct.contains("json") -> NetFilter.XHR
+        u.contains(".js") || ct.contains("javascript") -> NetFilter.JS
+        u.contains(".css") || ct.contains("css") -> NetFilter.CSS
+        ct.startsWith("image/") || Regex("\\.(png|jpe?g|gif|webp|svg|ico)").containsMatchIn(u) -> NetFilter.IMG
+        ct.contains("html") -> NetFilter.DOC
+        else -> NetFilter.ALL
+    }
+}
+
 @Composable
 fun NetworkTab(requests: List<NetworkRequest>, onSelectRequest: (NetworkRequest) -> Unit) {
-    LazyColumn(modifier = Modifier.fillMaxSize()) {
-        items(requests.reversed(), key = { it.id }) { req ->
-            NetworkRequestRow(request = req, onClick = { onSelectRequest(req) })
-            HorizontalDivider(thickness = 0.5.dp)
+    var query by remember { mutableStateOf("") }
+    var filter by remember { mutableStateOf(NetFilter.ALL) }
+
+    val filtered = requests.asReversed().filter { req ->
+        (query.isBlank() || req.url.contains(query, ignoreCase = true)) &&
+            (filter == NetFilter.ALL || classify(req) == filter ||
+                (filter == NetFilter.BLOCKED && req.isBlocked))
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            singleLine = true,
+            leadingIcon = { Icon(Icons.Default.Search, null, modifier = Modifier.size(18.dp)) },
+            placeholder = { Text("Filter by URL", style = MaterialTheme.typography.bodySmall) },
+            textStyle = MaterialTheme.typography.bodySmall
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            NetFilter.entries.forEach { f ->
+                FilterChip(
+                    selected = filter == f,
+                    onClick = { filter = f },
+                    label = { Text(f.label, fontSize = 11.sp) }
+                )
+            }
+        }
+        HorizontalDivider()
+        if (filtered.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("No requests captured yet.", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else {
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                items(filtered, key = { it.id }) { req ->
+                    NetworkRequestRow(request = req, onClick = { onSelectRequest(req) })
+                    HorizontalDivider(thickness = 0.5.dp)
+                }
+            }
         }
     }
 }
@@ -118,7 +184,7 @@ fun NetworkRequestRow(request: NetworkRequest, onClick: () -> Unit) {
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(modifier = Modifier.size(8.dp).background(statusColor, shape = MaterialTheme.shapes.small))
+        Box(modifier = Modifier.size(8.dp).background(statusColor, shape = RoundedCornerShape(2.dp)))
         Spacer(Modifier.width(12.dp))
 
         Column(modifier = Modifier.weight(1f)) {
@@ -132,14 +198,12 @@ fun NetworkRequestRow(request: NetworkRequest, onClick: () -> Unit) {
                 overflow = TextOverflow.Ellipsis
             )
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
-                    text = request.method,
-                    fontSize = 10.sp,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold
-                )
+                Text(request.method, fontSize = 10.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                if (request.source == "xhr" || request.source == "fetch") {
+                    Text(request.source.uppercase(), fontSize = 10.sp, color = MaterialTheme.colorScheme.tertiary)
+                }
                 if (request.mimeType != null) {
-                    Text(request.mimeType, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(request.mimeType.take(24), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 if (request.durationMs > 0) {
                     Text("${request.durationMs}ms", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -151,12 +215,7 @@ fun NetworkRequestRow(request: NetworkRequest, onClick: () -> Unit) {
         }
 
         if (request.responseStatus != null) {
-            Text(
-                text = "${request.responseStatus}",
-                color = statusColor,
-                fontWeight = FontWeight.Bold,
-                fontSize = 12.sp
-            )
+            Text("${request.responseStatus}", color = statusColor, fontWeight = FontWeight.Bold, fontSize = 12.sp)
         }
     }
 }
@@ -164,30 +223,82 @@ fun NetworkRequestRow(request: NetworkRequest, onClick: () -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RequestDetailSheet(request: NetworkRequest, onDismiss: () -> Unit) {
+    val context = LocalContext.current
     ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 32.dp)) {
-            Text("Request Detail", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(16.dp))
-
-            SelectionContainer {
-                Text(request.url, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-            }
-            Spacer(Modifier.height(16.dp))
-
-            Text("Request Headers", fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(8.dp))
-            request.requestHeaders.forEach { (k, v) ->
-                HeaderRow(name = k, value = v)
-            }
-
-            if (request.responseHeaders.isNotEmpty()) {
-                Spacer(Modifier.height(16.dp))
-                Text("Response Headers", fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(8.dp))
-                request.responseHeaders.forEach { (k, v) ->
-                    HeaderRow(name = k, value = v)
+        Column(
+            modifier = Modifier
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 32.dp)
+                .verticalScroll(rememberScrollState())
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Request Detail", fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                request.responseStatus?.let {
+                    Text("HTTP $it", style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary)
                 }
             }
+            Spacer(Modifier.height(12.dp))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                AssistChip(
+                    onClick = { copyToClipboard(context, "cURL", request.toCurl()) },
+                    label = { Text("Copy as cURL", fontSize = 12.sp) },
+                    leadingIcon = { Icon(Icons.Default.ContentCopy, null, modifier = Modifier.size(16.dp)) }
+                )
+                AssistChip(
+                    onClick = {
+                        NetworkInterceptor.addBlockRule(NetworkInterceptor.suggestRule(request.url))
+                        Toast.makeText(context, "Blocking ${NetworkInterceptor.suggestRule(request.url)}", Toast.LENGTH_SHORT).show()
+                    },
+                    label = { Text("Block", fontSize = 12.sp) },
+                    leadingIcon = { Icon(Icons.Default.Block, null, modifier = Modifier.size(16.dp)) }
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+
+            Text("URL", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium)
+            SelectionContainer { Text(request.url, fontFamily = FontFamily.Monospace, fontSize = 12.sp) }
+
+            if (request.requestHeaders.isNotEmpty()) {
+                SectionHeader("Request Headers")
+                request.requestHeaders.forEach { (k, v) -> HeaderRow(k, v) }
+            }
+            if (request.requestBody.isNotBlank()) {
+                SectionHeader("Request Body")
+                BodyBlock(request.requestBody)
+            }
+            if (request.responseHeaders.isNotEmpty()) {
+                SectionHeader("Response Headers")
+                request.responseHeaders.forEach { (k, v) -> HeaderRow(k, v) }
+            }
+            if (request.responseBody.isNotBlank()) {
+                SectionHeader("Response Body")
+                BodyBlock(request.responseBody)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SectionHeader(title: String) {
+    Spacer(Modifier.height(16.dp))
+    Text(title, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.primary)
+    Spacer(Modifier.height(6.dp))
+}
+
+@Composable
+private fun BodyBlock(body: String) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        SelectionContainer {
+            Text(body, fontFamily = FontFamily.Monospace, fontSize = 11.sp,
+                modifier = Modifier.padding(10.dp))
         }
     }
 }
@@ -195,34 +306,61 @@ fun RequestDetailSheet(request: NetworkRequest, onDismiss: () -> Unit) {
 @Composable
 fun HeaderRow(name: String, value: String) {
     Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-        Text(
-            text = name,
-            color = MaterialTheme.colorScheme.primary,
-            fontSize = 11.sp,
-            fontFamily = FontFamily.Monospace,
-            modifier = Modifier.width(140.dp)
-        )
+        Text(name, color = MaterialTheme.colorScheme.primary, fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace, modifier = Modifier.width(140.dp))
         SelectionContainer {
-            Text(
-                text = value,
-                fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace,
-                modifier = Modifier.weight(1f),
-                color = MaterialTheme.colorScheme.onSurface
-            )
+            Text(value, fontSize = 11.sp, fontFamily = FontFamily.Monospace,
+                modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurface)
         }
     }
 }
 
 @Composable
-fun ConsoleTab() {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(Icons.Default.Code, null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary.copy(0.5f))
-            Spacer(Modifier.height(8.dp))
-            Text("Eruda console is active on the page.", style = MaterialTheme.typography.bodySmall)
-            Text("Tap the Eruda icon on the webpage to open it.", style = MaterialTheme.typography.bodySmall,
+fun RulesTab(rules: List<String>) {
+    var newRule by remember { mutableStateOf("") }
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Text(
+            "Requests whose URL contains any rule are blocked (acts as a request interceptor).",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = newRule,
+                onValueChange = { newRule = it },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                placeholder = { Text("host or substring, e.g. ads.example.com") },
+                textStyle = MaterialTheme.typography.bodySmall
+            )
+            Spacer(Modifier.width(8.dp))
+            Button(onClick = {
+                NetworkInterceptor.addBlockRule(newRule)
+                newRule = ""
+            }, enabled = newRule.isNotBlank()) { Text("Add") }
+        }
+        Spacer(Modifier.height(12.dp))
+        if (rules.isEmpty()) {
+            Text("No block rules yet.", style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            LazyColumn {
+                items(rules, key = { it }) { rule ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Block, null, tint = Color(0xFFFF5252), modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(10.dp))
+                        Text(rule, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                        IconButton(onClick = { NetworkInterceptor.removeBlockRule(rule) }) {
+                            Icon(Icons.Default.Close, "Remove", modifier = Modifier.size(18.dp))
+                        }
+                    }
+                    HorizontalDivider(thickness = 0.5.dp)
+                }
+            }
         }
     }
 }
@@ -231,7 +369,12 @@ fun ConsoleTab() {
 fun ElementsTab(html: String) {
     if (html.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("Page source will appear here.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(Icons.Default.Code, null, modifier = Modifier.size(40.dp),
+                    tint = MaterialTheme.colorScheme.primary.copy(0.5f))
+                Spacer(Modifier.height(8.dp))
+                Text("Page source will appear here.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     } else {
         val scroll = rememberScrollState()
@@ -244,12 +387,14 @@ fun ElementsTab(html: String) {
 }
 
 @Composable
-fun InfoTab(url: String, requestCount: Int) {
+fun InfoTab(url: String, requestCount: Int, ruleCount: Int) {
     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         InfoRow("Current URL", url)
-        InfoRow("Total Requests", requestCount.toString())
-        InfoRow("Eruda", "Injected when Dev Mode is ON")
-        InfoRow("Network Interception", "Active via WebViewClient")
+        InfoRow("Captured requests", requestCount.toString())
+        InfoRow("Active block rules", ruleCount.toString())
+        InfoRow("fetch / XHR capture", "Bodies captured when Dev Console is ON")
+        InfoRow("Interceptor", "Add rules under the Rules tab to block requests")
+        InfoRow("Eruda", "Full JS console injected when Dev Console is ON")
     }
 }
 
@@ -261,4 +406,10 @@ fun InfoRow(label: String, value: String) {
             Text(value, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
+}
+
+private fun copyToClipboard(context: Context, label: String, text: String) {
+    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+    cm?.setPrimaryClip(ClipData.newPlainText(label, text))
+    Toast.makeText(context, "Copied $label", Toast.LENGTH_SHORT).show()
 }

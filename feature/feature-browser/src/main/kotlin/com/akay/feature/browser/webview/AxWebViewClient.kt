@@ -42,6 +42,12 @@ class AxWebViewClient(
         )
         NetworkInterceptor.onRequest(netReq)
 
+        // User-defined interceptor rules always apply (independent of ad blocker).
+        if (NetworkInterceptor.isUserBlocked(url)) {
+            NetworkInterceptor.markBlocked(url)
+            return WebResourceResponse("text/plain", "UTF-8", ByteArrayInputStream("".toByteArray()))
+        }
+
         if (adBlockerEnabled() && (AdBlockEngine.shouldBlock(url) || isBlocked(url))) {
             AdBlockEngine.onBlocked()
             NetworkInterceptor.markBlocked(url)

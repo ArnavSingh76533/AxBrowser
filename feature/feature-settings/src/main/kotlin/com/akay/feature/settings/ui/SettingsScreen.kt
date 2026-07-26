@@ -70,6 +70,7 @@ fun SettingsScreen(
     var showSearchEngineDialog by remember { mutableStateOf(false) }
     var showClearDataDialog by remember { mutableStateOf(false) }
     var showExportCookiesDialog by remember { mutableStateOf(false) }
+    var showHeadersDialog by remember { mutableStateOf(false) }
     var exportSite by remember { mutableStateOf("") }
     var pendingCookieExport by remember { mutableStateOf<String?>(null) }
 
@@ -185,6 +186,15 @@ fun SettingsScreen(
                 )
             }
 
+            SettingsSection(title = "Advanced") {
+                SettingsNavigationItem(
+                    title = "Custom request headers",
+                    subtitle = if (uiState.customHeaders.isBlank()) "None set"
+                               else "${uiState.customHeaders.lineSequence().count { it.isNotBlank() }} header(s)",
+                    onClick = { showHeadersDialog = true }
+                )
+            }
+
             SettingsSection(title = "Cookies") {
                 SettingsNavigationItem(
                     title = "Export site cookies",
@@ -293,6 +303,18 @@ fun SettingsScreen(
         )
     }
 
+    if (showHeadersDialog) {
+        CustomHeadersDialog(
+            initial = uiState.customHeaders,
+            onDismiss = { showHeadersDialog = false },
+            onSave = {
+                viewModel.setCustomHeaders(it)
+                showHeadersDialog = false
+                Toast.makeText(context, "Custom headers saved", Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+
     if (showExportCookiesDialog) {
         AlertDialog(
             onDismissRequest = { showExportCookiesDialog = false },
@@ -337,6 +359,39 @@ fun SettingsScreen(
             }
         )
     }
+}
+
+@Composable
+private fun CustomHeadersDialog(
+    initial: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    var text by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Custom request headers") },
+        text = {
+            Column {
+                Text(
+                    "One header per line as \"Name: value\". These are sent with page " +
+                        "loads. Example:\nX-Requested-With: AxBrowser\nDNT: 1",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    modifier = Modifier.fillMaxWidth().height(160.dp),
+                    placeholder = { Text("Header-Name: value") },
+                    textStyle = MaterialTheme.typography.bodySmall
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { onSave(text) }) { Text("Save") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 @Composable
