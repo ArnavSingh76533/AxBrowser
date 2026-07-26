@@ -63,12 +63,13 @@ data class DownloadManagerState(
     val qualityPickerUrl: String = "",
     val qualityPickerTitle: String = "",
     val qualityFormats: List<com.akay.feature.downloads.engine.VideoFormat> = emptyList(),
-    val isFetchingFormats: Boolean = false
+    val isFetchingFormats: Boolean = false,
+    val formatError: String? = null
 ) {
     val active get() = downloads.filter { it.status == ItemStatus.RUNNING || it.status == ItemStatus.QUEUED }
     val completed get() = downloads.filter { it.status == ItemStatus.COMPLETED }
     val failed get() = downloads.filter { it.status == ItemStatus.FAILED || it.status == ItemStatus.CANCELLED }
-    val showQualityPicker get() = qualityFormats.isNotEmpty() || isFetchingFormats
+    val showQualityPicker get() = qualityFormats.isNotEmpty() || isFetchingFormats || formatError != null
 }
 
 @HiltViewModel
@@ -283,15 +284,37 @@ class DownloadViewModel @Inject constructor(
     }
 
     fun enqueueWithQualityPicker(url: String) {
-        _state.update { it.copy(isFetchingFormats = true, qualityPickerUrl = url, qualityPickerTitle = "") }
+        if (url.isBlank()) return
+        _state.update {
+            it.copy(isFetchingFormats = true, qualityPickerUrl = url, qualityPickerTitle = "", formatError = null)
+        }
         viewModelScope.launch {
-            val formats = ytDlpEngine.getFormats(url)
-            if (formats.isEmpty()) {
-                _state.update { it.copy(isFetchingFormats = false) }
-                enqueue(url = url, filename = "%(title)s.%(ext)s", useYtDlp = true)
-            } else {
-                val title = runCatching { ytDlpEngine.getInfo(url)?.title ?: "" }.getOrDefault("")
-                _state.update { it.copy(isFetchingFormats = false, qualityFormats = formats, qualityPickerTitle = title) }
+            // Single yt-dlp call on the IO dispatcher (see YtDlpEngine.getVideoData).
+            val data = runCatching { ytDlpEngine.getVideoData(url) }.getOrNull()
+            when {
+                data != null && data.formats.isNotEmpty() -> {
+                    _state.update {
+                        it.copy(isFetchingFormats = false, qualityFormats = data.formats, qualityPickerTitle = data.title)
+                    }
+                }
+                // No explicit formats but the fetch itself succeeded: let yt-dlp
+                // pick the best quality automatically.
+                data != null && data.error == null -> {
+                    _state.update { it.copy(isFetchingFormats = false) }
+                    enqueue(url = url, filename = "%(title)s.%(ext)s", useYtDlp = true)
+                }
+                // Fetch failed (bad URL, DRM, offline, timeout): surface an error
+                // instead of hanging the picker forever.
+                else -> {
+                    _state.update {
+                        it.copy(
+                            isFetchingFormats = false,
+                            qualityFormats = emptyList(),
+                            formatError = data?.error?.take(140)
+                                ?: "Couldn't read this link. It may be unsupported or protected."
+                        )
+                    }
+                }
             }
         }
     }
@@ -308,7 +331,13 @@ class DownloadViewModel @Inject constructor(
     }
 
     fun dismissQualityPicker() {
-        _state.update { it.copy(qualityFormats = emptyList(), isFetchingFormats = false) }
+        _state.update { it.copy(qualityFormats = emptyList(), isFetchingFormats = false, formatError = null) }
+    }
+
+    fun downloadBestQuality() {
+        val url = _state.value.qualityPickerUrl
+        _state.update { it.copy(qualityFormats = emptyList(), isFetchingFormats = false, formatError = null, qualityPickerUrl = "") }
+        if (url.isNotBlank()) enqueue(url = url, filename = "%(title)s.%(ext)s", useYtDlp = true)
     }
 
     fun shareFile(id: String, context: Context) {

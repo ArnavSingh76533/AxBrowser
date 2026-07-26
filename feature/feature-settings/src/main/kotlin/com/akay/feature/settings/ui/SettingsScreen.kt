@@ -62,6 +62,7 @@ import com.akay.feature.settings.viewmodel.SettingsViewModel
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
+    onOpenExtensions: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -187,6 +188,11 @@ fun SettingsScreen(
             }
 
             SettingsSection(title = "Advanced") {
+                SettingsNavigationItem(
+                    title = "Extensions (userscripts)",
+                    subtitle = "Run custom scripts on pages, import .user.js",
+                    onClick = onOpenExtensions
+                )
                 SettingsNavigationItem(
                     title = "Custom request headers",
                     subtitle = if (uiState.customHeaders.isBlank()) "None set"

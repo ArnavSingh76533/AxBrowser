@@ -119,7 +119,9 @@ fun DownloadManagerScreen(
             title     = state.qualityPickerTitle,
             formats   = state.qualityFormats,
             isLoading = state.isFetchingFormats,
+            error     = state.formatError,
             onSelect  = { fmt -> viewModel.downloadWithFormat(fmt) },
+            onBestQuality = { viewModel.downloadBestQuality() },
             onDismiss = { viewModel.dismissQualityPicker() }
         )
     }

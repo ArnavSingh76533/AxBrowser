@@ -113,6 +113,11 @@ fun BrowserScreen(
     val desktopMode by viewModel.desktopMode.collectAsState(initial = false)
     val fontSize by viewModel.fontSize.collectAsState(initial = 100)
     val customHeadersRaw by viewModel.customHeaders.collectAsState(initial = "")
+    val userScriptsRaw by viewModel.userScripts.collectAsState(initial = "")
+    val userScripts = remember(userScriptsRaw) {
+        com.akay.core.data.userscript.UserScriptCodec.decode(userScriptsRaw).filter { it.enabled }
+    }
+    val userScriptsState = rememberUpdatedState(userScripts)
 
     val isIncognito = uiState.activeTab?.isIncognito == true
 
@@ -124,6 +129,9 @@ fun BrowserScreen(
     val customHeadersState = rememberUpdatedState(customHeaders)
 
     var appliedDesktopMode by remember { mutableStateOf<Boolean?>(null) }
+    // Default mobile UA with the "wv" WebView marker stripped so DRM/streaming
+    // sites (Netflix, etc.) and WebView-blocking sites treat us as real Chrome.
+    var mobileUserAgent by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) { AdBlockEngine.ensureLoaded(context) }
 
@@ -406,6 +414,7 @@ fun BrowserScreen(
                             )
                             settings.javaScriptEnabled = true
                             settings.domStorageEnabled = true
+                            settings.databaseEnabled = true
                             settings.mediaPlaybackRequiresUserGesture = false
                             settings.useWideViewPort = true
                             settings.loadWithOverviewMode = true
@@ -414,6 +423,14 @@ fun BrowserScreen(
                             settings.allowFileAccess = false
                             settings.allowContentAccess = false
                             settings.setSupportMultipleWindows(false)
+                            // Allow https pages to load http sub-resources some
+                            // players need; EME/Widevine is enabled by default.
+                            settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                            // Present as real Chrome (drop the "; wv" token).
+                            val baseUa = settings.userAgentString ?: ""
+                            mobileUserAgent = baseUa.replace(" wv)", ")").replace("; wv", "")
+                            if (!desktopMode) settings.userAgentString = mobileUserAgent
+                            WebView.setWebContentsDebuggingEnabled(true)
                             setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
 
                             addJavascriptInterface(AxNetBridge(), "AxNet")
@@ -449,6 +466,12 @@ fun BrowserScreen(
                                         runCatching {
                                             ctx.assets.open("js/net_capture.js").bufferedReader().readText()
                                         }.getOrNull()?.let { evaluateJavascript(it, null) }
+                                    }
+                                    // document-start userscripts
+                                    userScriptsState.value.forEach { script ->
+                                        if (!script.runAtEnd && script.matches(url)) {
+                                            evaluateJavascript("(function(){try{${script.code}}catch(e){console.error(e)}})();", null)
+                                        }
                                     }
                                 },
                                 onPageFinished = { url, title ->
@@ -487,6 +510,12 @@ fun BrowserScreen(
                                             }
                                         }
                                     }
+                                    // document-end userscripts
+                                    userScriptsState.value.forEach { script ->
+                                        if (script.runAtEnd && script.matches(url)) {
+                                            evaluateJavascript("(function(){try{${script.code}}catch(e){console.error(e)}})();", null)
+                                        }
+                                    }
                                 },
                                 onError = { viewModel.updateTitle("Error") },
                                 adBlockerEnabled = { adBlockOnState.value },
@@ -521,7 +550,8 @@ fun BrowserScreen(
                         if (appliedDesktopMode != desktopMode) {
                             val firstApply = appliedDesktopMode == null
                             appliedDesktopMode = desktopMode
-                            wv.settings.userAgentString = if (desktopMode) DESKTOP_USER_AGENT else null
+                            wv.settings.userAgentString =
+                                if (desktopMode) DESKTOP_USER_AGENT else mobileUserAgent
                             if (!firstApply) wv.reload()
                         }
                         if (uiState.url.isNotEmpty() && uiState.url != lastNavigatedUrl) {
@@ -700,7 +730,9 @@ fun BrowserScreen(
             title     = dlState.qualityPickerTitle,
             formats   = dlState.qualityFormats,
             isLoading = dlState.isFetchingFormats,
+            error     = dlState.formatError,
             onSelect  = { fmt -> downloadViewModel.downloadWithFormat(fmt) },
+            onBestQuality = { downloadViewModel.downloadBestQuality() },
             onDismiss = { downloadViewModel.dismissQualityPicker() }
         )
     }
