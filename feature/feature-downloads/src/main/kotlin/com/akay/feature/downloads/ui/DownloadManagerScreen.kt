@@ -106,6 +106,10 @@ fun DownloadManagerScreen(
                                     onOpen = { viewModel.openFile(it, context, onPlayInApp) },
                                     onShare = { viewModel.shareFile(it, context) }
                                 )
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -118,10 +122,6 @@ fun DownloadManagerScreen(
             onSelect  = { fmt -> viewModel.downloadWithFormat(fmt) },
             onDismiss = { viewModel.dismissQualityPicker() }
         )
-    }
-}
-            }
-        }
     }
 }
 

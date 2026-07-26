@@ -1,9 +1,12 @@
 package com.akay.feature.settings.viewmodel
 
 import android.content.Context
+import android.webkit.CookieManager
+import android.webkit.WebStorage
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.akay.core.data.datastore.AxPreferences
+import com.akay.core.domain.repository.HistoryRepository
 import com.akay.feature.downloads.engine.YtDlpSetup
 import com.yausername.youtubedl_android.YoutubeDL
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -13,7 +16,18 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
+
+data class SearchEngineOption(val name: String, val url: String)
+
+val SEARCH_ENGINES = listOf(
+    SearchEngineOption("Google", "https://www.google.com/search?q="),
+    SearchEngineOption("DuckDuckGo", "https://duckduckgo.com/?q="),
+    SearchEngineOption("Bing", "https://www.bing.com/search?q="),
+    SearchEngineOption("Brave Search", "https://search.brave.com/search?q="),
+    SearchEngineOption("Startpage", "https://www.startpage.com/sp/search?query=")
+)
 
 data class SettingsUiState(
     val isDarkMode: Boolean = true,
@@ -26,12 +40,17 @@ data class SettingsUiState(
     val clearCacheOnExit: Boolean = false,
     val isErudaEnabled: Boolean = false,
     val ytDlpInstalled: Boolean = false,
-    val ytDlpUpdateStatus: String? = null
-)
+    val ytDlpUpdateStatus: String? = null,
+    val searchEngineUrl: String = SEARCH_ENGINES.first().url
+) {
+    val searchEngineName: String
+        get() = SEARCH_ENGINES.firstOrNull { it.url == searchEngineUrl }?.name ?: "Custom"
+}
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val preferences: AxPreferences,
+    private val historyRepository: HistoryRepository,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -70,6 +89,9 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             preferences.erudaEnabled.collect { _uiState.value = _uiState.value.copy(isErudaEnabled = it) }
         }
+        viewModelScope.launch {
+            preferences.searchEngine.collect { _uiState.value = _uiState.value.copy(searchEngineUrl = it) }
+        }
         _uiState.value = _uiState.value.copy(
             ytDlpInstalled = YtDlpSetup.isInstalled(context)
         )
@@ -83,6 +105,34 @@ class SettingsViewModel @Inject constructor(
     fun setFontSize(size: Int) { viewModelScope.launch { preferences.setFontSize(size) } }
     fun setClearCacheOnExit(enabled: Boolean) { viewModelScope.launch { preferences.setClearCacheOnExit(enabled) } }
     fun setErudaEnabled(enabled: Boolean) { viewModelScope.launch { preferences.setErudaEnabled(enabled) } }
+    fun setSearchEngine(url: String) { viewModelScope.launch { preferences.setSearchEngine(url) } }
+
+    fun clearBrowsingData(
+        clearHistory: Boolean,
+        clearCookies: Boolean,
+        clearCache: Boolean,
+        onDone: () -> Unit
+    ) {
+        viewModelScope.launch {
+            if (clearHistory) {
+                runCatching { historyRepository.deleteAllHistory() }
+            }
+            if (clearCookies) {
+                runCatching {
+                    val manager = CookieManager.getInstance()
+                    manager.removeAllCookies(null)
+                    manager.flush()
+                    WebStorage.getInstance().deleteAllData()
+                }
+            }
+            if (clearCache) {
+                withContext(Dispatchers.IO) {
+                    runCatching { context.cacheDir.deleteRecursively() }
+                }
+            }
+            onDone()
+        }
+    }
 
     fun updateYtDlp() {
         viewModelScope.launch(Dispatchers.IO) {
