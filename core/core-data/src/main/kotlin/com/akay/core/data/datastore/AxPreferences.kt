@@ -50,17 +50,17 @@ class AxPreferences @Inject constructor(
     val clearCacheOnExit: Flow<Boolean> = context.dataStore.data.map { it[Keys.CLEAR_CACHE_ON_EXIT] ?: false }
     val erudaEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.ERUDA_ENABLED] ?: false }
 
-    suspend fun setSearchEngine(url: String) = context.dataStore.edit { it[Keys.SEARCH_ENGINE] = url }
-    suspend fun setHomepage(url: String) = context.dataStore.edit { it[Keys.HOMEPAGE] = url }
-    suspend fun setDarkMode(enabled: Boolean) = context.dataStore.edit { it[Keys.IS_DARK_MODE] = enabled }
-    suspend fun setAdBlockerEnabled(enabled: Boolean) = context.dataStore.edit { it[Keys.IS_AD_BLOCKER_ENABLED] = enabled }
-    suspend fun setTrackerBlockerEnabled(enabled: Boolean) = context.dataStore.edit { it[Keys.IS_TRACKER_BLOCKER_ENABLED] = enabled }
-    suspend fun setHttpsUpgrade(enabled: Boolean) = context.dataStore.edit { it[Keys.IS_HTTPS_UPGRADE] = enabled }
-    suspend fun setJavascriptEnabled(enabled: Boolean) = context.dataStore.edit { it[Keys.IS_JAVASCRIPT_ENABLED] = enabled }
-    suspend fun setMaxConcurrentDownloads(count: Int) = context.dataStore.edit { it[Keys.MAX_CONCURRENT_DOWNLOADS] = count }
-    suspend fun setDownloadFolderUri(uri: String) = context.dataStore.edit { it[Keys.DOWNLOAD_FOLDER_URI] = uri }
-    suspend fun setDesktopMode(enabled: Boolean) = context.dataStore.edit { it[Keys.IS_DESKTOP_MODE] = enabled }
-    suspend fun setFontSize(size: Int) = context.dataStore.edit { it[Keys.FONT_SIZE] = size }
-    suspend fun setClearCacheOnExit(enabled: Boolean) = context.dataStore.edit { it[Keys.CLEAR_CACHE_ON_EXIT] = enabled }
-    suspend fun setErudaEnabled(enabled: Boolean) = context.dataStore.edit { it[Keys.ERUDA_ENABLED] = enabled }
+    suspend fun setSearchEngine(url: String) { context.dataStore.edit { it[Keys.SEARCH_ENGINE] = url } }
+    suspend fun setHomepage(url: String) { context.dataStore.edit { it[Keys.HOMEPAGE] = url } }
+    suspend fun setDarkMode(enabled: Boolean) { context.dataStore.edit { it[Keys.IS_DARK_MODE] = enabled } }
+    suspend fun setAdBlockerEnabled(enabled: Boolean) { context.dataStore.edit { it[Keys.IS_AD_BLOCKER_ENABLED] = enabled } }
+    suspend fun setTrackerBlockerEnabled(enabled: Boolean) { context.dataStore.edit { it[Keys.IS_TRACKER_BLOCKER_ENABLED] = enabled } }
+    suspend fun setHttpsUpgrade(enabled: Boolean) { context.dataStore.edit { it[Keys.IS_HTTPS_UPGRADE] = enabled } }
+    suspend fun setJavascriptEnabled(enabled: Boolean) { context.dataStore.edit { it[Keys.IS_JAVASCRIPT_ENABLED] = enabled } }
+    suspend fun setMaxConcurrentDownloads(count: Int) { context.dataStore.edit { it[Keys.MAX_CONCURRENT_DOWNLOADS] = count } }
+    suspend fun setDownloadFolderUri(uri: String) { context.dataStore.edit { it[Keys.DOWNLOAD_FOLDER_URI] = uri } }
+    suspend fun setDesktopMode(enabled: Boolean) { context.dataStore.edit { it[Keys.IS_DESKTOP_MODE] = enabled } }
+    suspend fun setFontSize(size: Int) { context.dataStore.edit { it[Keys.FONT_SIZE] = size } }
+    suspend fun setClearCacheOnExit(enabled: Boolean) { context.dataStore.edit { it[Keys.CLEAR_CACHE_ON_EXIT] = enabled } }
+    suspend fun setErudaEnabled(enabled: Boolean) { context.dataStore.edit { it[Keys.ERUDA_ENABLED] = enabled } }
 }
