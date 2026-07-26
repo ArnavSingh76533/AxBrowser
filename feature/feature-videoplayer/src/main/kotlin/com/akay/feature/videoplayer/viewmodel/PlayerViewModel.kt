@@ -7,12 +7,14 @@ import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import com.akay.feature.videoplayer.PendingMediaPlay
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.io.File
 import javax.inject.Inject
 
 data class PlayerUiState(
@@ -75,11 +77,24 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    fun loadVideo(url: String, title: String = "") {
-        _uiState.value = _uiState.value.copy(videoUrl = url, title = title, isLoading = true)
+    fun loadPending() {
+        val path  = PendingMediaPlay.filePath
+        val title = PendingMediaPlay.title
+        if (path.isBlank()) return
+        PendingMediaPlay.filePath = ""
+        PendingMediaPlay.title    = ""
+        loadVideo(path, title)
+    }
+
+    fun loadVideo(path: String, title: String = "") {
+        _uiState.value = _uiState.value.copy(videoUrl = path, title = title, isLoading = true, error = null)
         exoPlayer?.let { player ->
-            val mediaItem = MediaItem.fromUri(Uri.parse(url))
-            player.setMediaItem(mediaItem)
+            val uri = when {
+                path.startsWith("http://") || path.startsWith("https://") -> Uri.parse(path)
+                path.startsWith("file://") -> Uri.parse(path)
+                else -> Uri.fromFile(File(path))
+            }
+            player.setMediaItem(MediaItem.fromUri(uri))
             player.prepare()
             player.play()
         }

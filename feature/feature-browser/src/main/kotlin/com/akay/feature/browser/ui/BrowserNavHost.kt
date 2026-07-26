@@ -26,6 +26,7 @@ import com.akay.feature.downloads.viewmodel.DownloadViewModel
 import com.akay.feature.filemanager.ui.FileManagerScreen
 import com.akay.feature.history.ui.HistoryScreen
 import com.akay.feature.settings.ui.SettingsScreen
+import com.akay.feature.videoplayer.PendingMediaPlay
 import com.akay.feature.videoplayer.ui.VideoPlayerScreen
 
 private sealed class NavRoute(val route: String, val label: String, val icon: ImageVector) {
@@ -127,9 +128,9 @@ fun BrowserNavHost() {
                     onBack = { navController.popBackStack() },
                     viewModel = downloadViewModel,
                     onPlayInApp = { filePath, title ->
-                        val encodedPath = java.net.URLEncoder.encode(filePath, "UTF-8")
-                        val encodedTitle = java.net.URLEncoder.encode(title, "UTF-8")
-                        navController.navigate("videoplayer?url=file://$encodedPath&title=$encodedTitle")
+                        PendingMediaPlay.filePath = filePath
+                        PendingMediaPlay.title = title
+                        navController.navigate("videoplayer")
                     }
                 )
             }
@@ -142,20 +143,14 @@ fun BrowserNavHost() {
             composable(NavRoute.Settings.route) {
                 SettingsScreen(onBack = { navController.popBackStack() })
             }
-            composable(
-                route = "videoplayer?url={url}&title={title}",
-                arguments = listOf(
-                    navArgument("url") { type = NavType.StringType },
-                    navArgument("title") { type = NavType.StringType; defaultValue = "" }
-                )
-            ) { backStackEntry ->
-                val url = backStackEntry.arguments?.getString("url") ?: ""
-                val title = backStackEntry.arguments?.getString("title") ?: ""
-                VideoPlayerScreen(videoUrl = url, title = title, onBack = { navController.popBackStack() })
+            composable("videoplayer") {
+                VideoPlayerScreen(onBack = { navController.popBackStack() })
             }
             composable("filemanager") {
                 FileManagerScreen(onFileClick = { path ->
-                    navController.navigate("videoplayer?url=${Uri.encode("file://$path")}")
+                    PendingMediaPlay.filePath = path
+                    PendingMediaPlay.title = path.substringAfterLast("/")
+                    navController.navigate("videoplayer")
                 })
             }
         }

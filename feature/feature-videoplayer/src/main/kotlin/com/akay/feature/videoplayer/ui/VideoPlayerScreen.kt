@@ -30,8 +30,6 @@ import kotlinx.coroutines.delay
 
 @Composable
 fun VideoPlayerScreen(
-    videoUrl: String,
-    title: String = "",
     viewModel: PlayerViewModel = hiltViewModel(),
     onBack: () -> Unit = {}
 ) {
@@ -48,7 +46,7 @@ fun VideoPlayerScreen(
         }
     }
 
-    LaunchedEffect(videoUrl) { viewModel.loadVideo(videoUrl, title) }
+    LaunchedEffect(Unit) { viewModel.loadPending() }
     DisposableEffect(Unit) { onDispose { viewModel.release() } }
 
     DisposableEffect(isFullscreen) {

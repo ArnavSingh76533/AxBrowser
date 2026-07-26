@@ -59,11 +59,16 @@ data class DownloadManagerState(
     val ytDlpReady: Boolean = false,
     val ytDlpSetupProgress: Int = 0,
     val isSettingUpYtDlp: Boolean = false,
-    val setupError: String? = null
+    val setupError: String? = null,
+    val qualityPickerUrl: String = "",
+    val qualityPickerTitle: String = "",
+    val qualityFormats: List<com.akay.feature.downloads.engine.VideoFormat> = emptyList(),
+    val isFetchingFormats: Boolean = false
 ) {
     val active get() = downloads.filter { it.status == ItemStatus.RUNNING || it.status == ItemStatus.QUEUED }
     val completed get() = downloads.filter { it.status == ItemStatus.COMPLETED }
     val failed get() = downloads.filter { it.status == ItemStatus.FAILED || it.status == ItemStatus.CANCELLED }
+    val showQualityPicker get() = qualityFormats.isNotEmpty() || isFetchingFormats
 }
 
 @HiltViewModel
@@ -275,6 +280,35 @@ class DownloadViewModel @Inject constructor(
                 onError    = { err -> _state.update { it.copy(isSettingUpYtDlp = false, setupError = err) } }
             )
         }
+    }
+
+    fun enqueueWithQualityPicker(url: String) {
+        _state.update { it.copy(isFetchingFormats = true, qualityPickerUrl = url, qualityPickerTitle = "") }
+        viewModelScope.launch {
+            val formats = ytDlpEngine.getFormats(url)
+            if (formats.isEmpty()) {
+                _state.update { it.copy(isFetchingFormats = false) }
+                enqueue(url = url, filename = "%(title)s.%(ext)s", useYtDlp = true)
+            } else {
+                val title = runCatching { ytDlpEngine.getInfo(url)?.title ?: "" }.getOrDefault("")
+                _state.update { it.copy(isFetchingFormats = false, qualityFormats = formats, qualityPickerTitle = title) }
+            }
+        }
+    }
+
+    fun downloadWithFormat(format: com.akay.feature.downloads.engine.VideoFormat) {
+        val url   = _state.value.qualityPickerUrl
+        val title = _state.value.qualityPickerTitle
+            .ifBlank { "video_${System.currentTimeMillis()}" }
+            .replace(Regex("[/\\\\:*?\"<>|]"), "_")
+            .take(80)
+        val filename = "$title.${format.ext}"
+        _state.update { it.copy(qualityFormats = emptyList(), qualityPickerUrl = "") }
+        enqueue(url = url, filename = filename, useYtDlp = true, formatId = format.formatId)
+    }
+
+    fun dismissQualityPicker() {
+        _state.update { it.copy(qualityFormats = emptyList(), isFetchingFormats = false) }
     }
 
     fun shareFile(id: String, context: Context) {

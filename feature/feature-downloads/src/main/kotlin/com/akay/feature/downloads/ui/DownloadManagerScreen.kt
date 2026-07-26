@@ -106,10 +106,20 @@ fun DownloadManagerScreen(
                                     onOpen = { viewModel.openFile(it, context, onPlayInApp) },
                                     onShare = { viewModel.shareFile(it, context) }
                                 )
-                            }
-                        }
-                    }
-                }
+            }
+        }
+    }
+
+    if (state.showQualityPicker) {
+        QualityPickerSheet(
+            title     = state.qualityPickerTitle,
+            formats   = state.qualityFormats,
+            isLoading = state.isFetchingFormats,
+            onSelect  = { fmt -> viewModel.downloadWithFormat(fmt) },
+            onDismiss = { viewModel.dismissQualityPicker() }
+        )
+    }
+}
             }
         }
     }

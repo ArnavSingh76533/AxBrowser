@@ -8,6 +8,7 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.withContext
 import java.io.File
 
 class YtDlpEngine(private val context: Context) {
@@ -111,6 +112,36 @@ class YtDlpEngine(private val context: Context) {
         )
     }.getOrNull()
 
+    suspend fun getFormats(url: String): List<VideoFormat> = withContext(Dispatchers.IO) {
+        runCatching {
+            val info = YoutubeDL.getInstance().getInfo(url)
+            val formats = info.formats ?: return@runCatching emptyList()
+
+            formats.mapNotNull { fmt ->
+                val id  = fmt.formatId ?: return@mapNotNull null
+                val ext = fmt.ext ?: "mp4"
+                val h   = fmt.height ?: 0
+                val size = fmt.filesize ?: fmt.filesizeApprox ?: 0L
+
+                val isVideoOnly = fmt.vcodec?.isNotEmpty() == true && (fmt.acodec == null || fmt.acodec == "none")
+                val isAudioOnly = (fmt.vcodec == null || fmt.vcodec == "none") && fmt.acodec?.isNotEmpty() == true
+
+                val label = when {
+                    isAudioOnly -> "Audio only - ${ext.uppercase()}"
+                    h > 0       -> "${h}p${if (!isVideoOnly) " - $ext" else " (video only) - $ext"}"
+                    else        -> "${fmt.format ?: id} - $ext"
+                }
+
+                VideoFormat(
+                    formatId = id, label = label, ext = ext,
+                    fileSizeBytes = size, height = h, isAudioOnly = isAudioOnly
+                )
+            }
+            .distinctBy { it.label }
+            .sortedWith(compareByDescending<VideoFormat> { it.height }.thenBy { it.isAudioOnly })
+        }.getOrElse { emptyList() }
+    }
+
     fun updateYtDlp(
         onProgress: (String) -> Unit,
         onSuccess: () -> Unit,
@@ -138,3 +169,17 @@ data class VideoInfo(
     val duration: Double,
     val url: String
 )
+
+data class VideoFormat(
+    val formatId: String,
+    val label: String,
+    val ext: String,
+    val fileSizeBytes: Long,
+    val height: Int,
+    val isAudioOnly: Boolean
+) {
+    val displaySize: String get() = when {
+        fileSizeBytes > 0 -> "${"%.1f".format(fileSizeBytes / (1024f * 1024f))} MB"
+        else -> "Size unknown"
+    }
+}

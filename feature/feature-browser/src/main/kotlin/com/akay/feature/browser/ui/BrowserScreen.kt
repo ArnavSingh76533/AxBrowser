@@ -393,7 +393,7 @@ fun BrowserScreen(
                     },
                     onDownloadWithYtDlp = { url ->
                         showMediaSheet = false
-                        downloadViewModel.enqueue(url = url, filename = "%(title)s.%(ext)s", useYtDlp = true)
+                        downloadViewModel.enqueueWithQualityPicker(url)
                     },
                     onDismiss = { showMediaSheet = false }
                 )
@@ -421,6 +421,17 @@ fun BrowserScreen(
                 onDismiss = { showPasteLinkDialog = false }
             )
         }
+    }
+
+    val dlState by downloadViewModel.state.collectAsState()
+    if (dlState.showQualityPicker) {
+        com.akay.feature.downloads.ui.QualityPickerSheet(
+            title     = dlState.qualityPickerTitle,
+            formats   = dlState.qualityFormats,
+            isLoading = dlState.isFetchingFormats,
+            onSelect  = { fmt -> downloadViewModel.downloadWithFormat(fmt) },
+            onDismiss = { downloadViewModel.dismissQualityPicker() }
+        )
     }
 }
 
