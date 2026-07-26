@@ -11,9 +11,14 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.akay.core.ui.theme.AxTheme
+import com.akay.core.ui.theme.GalaxyConfig
+import com.akay.core.ui.theme.accentByName
 import com.akay.feature.browser.ui.BrowserNavHost
 import dagger.hilt.android.AndroidEntryPoint
 
@@ -34,7 +39,17 @@ class MainActivity : ComponentActivity() {
         requestRequiredPermissions()
 
         setContent {
-            AxTheme {
+            val themeViewModel: AppThemeViewModel = hiltViewModel()
+            val theme by themeViewModel.state.collectAsState()
+            AxTheme(
+                darkTheme = theme.isDarkMode,
+                amoled = theme.amoled,
+                accent = accentByName(theme.accentName),
+                galaxy = GalaxyConfig(
+                    enabled = theme.galaxyEnabled,
+                    intensity = (theme.animationIntensity / 100f).coerceIn(0.2f, 1.5f)
+                )
+            ) {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     BrowserNavHost()
                 }
