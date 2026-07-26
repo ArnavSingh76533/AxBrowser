@@ -23,6 +23,7 @@ import com.akay.feature.downloads.viewmodel.DownloadViewModel
 import com.akay.feature.filemanager.ui.FileManagerScreen
 import com.akay.feature.history.ui.HistoryScreen
 import com.akay.feature.settings.ui.SettingsScreen
+import com.akay.feature.settings.ui.UserScriptsScreen
 import com.akay.feature.videoplayer.PendingMediaPlay
 import com.akay.feature.videoplayer.ui.VideoPlayerScreen
 
@@ -132,7 +133,13 @@ fun BrowserNavHost() {
                 HistoryScreen(onHistoryClick = { navController.navigate(NavRoute.Browser.route) }, onBack = { navController.popBackStack() })
             }
             composable(NavRoute.Settings.route) {
-                SettingsScreen(onBack = { navController.popBackStack() })
+                SettingsScreen(
+                    onBack = { navController.popBackStack() },
+                    onOpenExtensions = { navController.navigate("userscripts") }
+                )
+            }
+            composable("userscripts") {
+                UserScriptsScreen(onBack = { navController.popBackStack() })
             }
             composable("videoplayer") {
                 VideoPlayerScreen(onBack = { navController.popBackStack() })

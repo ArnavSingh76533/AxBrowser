@@ -107,22 +107,31 @@ class YtDlpEngine(private val context: Context) {
         return null
     }
 
-    suspend fun getInfo(url: String): VideoInfo? = runCatching {
-        val info = YoutubeDL.getInstance().getInfo(url)
-        VideoInfo(
-            title     = info.title ?: "Unknown",
-            thumbnail = info.thumbnail ?: "",
-            duration  = (info.duration ?: 0).toDouble(),
-            url       = info.url ?: url
-        )
-    }.getOrNull()
-
-    suspend fun getFormats(url: String): List<VideoFormat> = withContext(Dispatchers.IO) {
+    suspend fun getInfo(url: String): VideoInfo? = withContext(Dispatchers.IO) {
         runCatching {
             val info = YoutubeDL.getInstance().getInfo(url)
-            val formats = info.formats ?: return@runCatching emptyList()
+            VideoInfo(
+                title     = info.title ?: "Unknown",
+                thumbnail = info.thumbnail ?: "",
+                duration  = (info.duration ?: 0).toDouble(),
+                url       = info.url ?: url
+            )
+        }.getOrNull()
+    }
 
-            formats.mapNotNull { fmt ->
+    /**
+     * Fetches the title and the available formats in a SINGLE yt-dlp call, on
+     * the IO dispatcher. Previously the quality picker made two separate
+     * blocking calls (one of them on the main thread), which froze the UI and
+     * crashed. A timeout guards against hangs on unsupported URLs.
+     */
+    suspend fun getVideoData(url: String): VideoData = withContext(Dispatchers.IO) {
+        runCatching {
+            val info = kotlinx.coroutines.withTimeout(90_000) {
+                YoutubeDL.getInstance().getInfo(url)
+            }
+            val title = info.title ?: ""
+            val formats = (info.formats ?: emptyList()).mapNotNull { fmt ->
                 val id  = fmt.formatId ?: return@mapNotNull null
                 val ext = fmt.ext ?: "mp4"
                 val h   = fmt.height ?: 0
@@ -141,10 +150,13 @@ class YtDlpEngine(private val context: Context) {
                     fileSizeBytes = 0L, height = h, isAudioOnly = isAudioOnly
                 )
             }
-            .distinctBy { it.label }
-            .sortedWith(compareByDescending<VideoFormat> { it.height }.thenBy { it.isAudioOnly })
-        }.getOrElse { emptyList() }
+                .distinctBy { it.label }
+                .sortedWith(compareByDescending<VideoFormat> { it.height }.thenBy { it.isAudioOnly })
+            VideoData(title = title, formats = formats)
+        }.getOrElse { VideoData(title = "", formats = emptyList(), error = it.message) }
     }
+
+    suspend fun getFormats(url: String): List<VideoFormat> = getVideoData(url).formats
 
     fun updateYtDlp(
         onProgress: (String) -> Unit,
@@ -172,6 +184,12 @@ data class VideoInfo(
     val thumbnail: String,
     val duration: Double,
     val url: String
+)
+
+data class VideoData(
+    val title: String,
+    val formats: List<VideoFormat>,
+    val error: String? = null
 )
 
 data class VideoFormat(

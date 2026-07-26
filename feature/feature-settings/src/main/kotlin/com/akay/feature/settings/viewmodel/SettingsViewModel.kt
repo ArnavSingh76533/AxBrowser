@@ -6,6 +6,8 @@ import android.webkit.WebStorage
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.akay.core.data.datastore.AxPreferences
+import com.akay.core.data.userscript.UserScript
+import com.akay.core.data.userscript.UserScriptCodec
 import com.akay.core.domain.repository.HistoryRepository
 import com.akay.feature.downloads.engine.YtDlpSetup
 import com.yausername.youtubedl_android.YoutubeDL
@@ -58,8 +60,54 @@ class SettingsViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
+    private val _userScripts = MutableStateFlow<List<UserScript>>(emptyList())
+    val userScripts: StateFlow<List<UserScript>> = _userScripts.asStateFlow()
+
     init {
         loadPreferences()
+        viewModelScope.launch {
+            preferences.userScripts.collect { _userScripts.value = UserScriptCodec.decode(it) }
+        }
+    }
+
+    private fun persistScripts(list: List<UserScript>) {
+        viewModelScope.launch { preferences.setUserScripts(UserScriptCodec.encode(list)) }
+    }
+
+    fun saveScript(script: UserScript) {
+        val current = _userScripts.value
+        val updated = if (current.any { it.id == script.id }) {
+            current.map { if (it.id == script.id) script else it }
+        } else current + script
+        persistScripts(updated)
+    }
+
+    fun deleteScript(id: String) = persistScripts(_userScripts.value.filterNot { it.id == id })
+
+    fun toggleScript(id: String) = persistScripts(
+        _userScripts.value.map { if (it.id == id) it.copy(enabled = !it.enabled) else it }
+    )
+
+    fun importScriptFromUrl(url: String, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val normalized = if (url.startsWith("http")) url else "https://$url"
+                    val conn = (java.net.URL(normalized).openConnection() as java.net.HttpURLConnection).apply {
+                        connectTimeout = 15000
+                        readTimeout = 15000
+                        setRequestProperty("User-Agent", "AxBrowser")
+                    }
+                    conn.inputStream.bufferedReader().use { it.readText() }
+                }
+            }
+            result.onSuccess { source ->
+                if (source.isBlank()) { onResult(false, "Empty file"); return@launch }
+                val script = UserScriptCodec.fromUserJs(source)
+                saveScript(script)
+                onResult(true, "Imported \"${script.name}\"")
+            }.onFailure { onResult(false, it.message ?: "Import failed") }
+        }
     }
 
     private fun loadPreferences() {

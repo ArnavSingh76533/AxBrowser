@@ -35,6 +35,7 @@ class AxPreferences @Inject constructor(
         val CLEAR_CACHE_ON_EXIT = booleanPreferencesKey("clear_cache_on_exit")
         val ERUDA_ENABLED = booleanPreferencesKey("eruda_enabled")
         val CUSTOM_HEADERS = stringPreferencesKey("custom_headers")
+        val USER_SCRIPTS = stringPreferencesKey("user_scripts")
     }
 
     val searchEngine: Flow<String> = context.dataStore.data.map { it[Keys.SEARCH_ENGINE] ?: "https://www.google.com/search?q=" }
@@ -51,6 +52,7 @@ class AxPreferences @Inject constructor(
     val clearCacheOnExit: Flow<Boolean> = context.dataStore.data.map { it[Keys.CLEAR_CACHE_ON_EXIT] ?: false }
     val erudaEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.ERUDA_ENABLED] ?: false }
     val customHeaders: Flow<String> = context.dataStore.data.map { it[Keys.CUSTOM_HEADERS] ?: "" }
+    val userScripts: Flow<String> = context.dataStore.data.map { it[Keys.USER_SCRIPTS] ?: "" }
 
     suspend fun setSearchEngine(url: String) { context.dataStore.edit { it[Keys.SEARCH_ENGINE] = url } }
     suspend fun setHomepage(url: String) { context.dataStore.edit { it[Keys.HOMEPAGE] = url } }
@@ -66,4 +68,5 @@ class AxPreferences @Inject constructor(
     suspend fun setClearCacheOnExit(enabled: Boolean) { context.dataStore.edit { it[Keys.CLEAR_CACHE_ON_EXIT] = enabled } }
     suspend fun setErudaEnabled(enabled: Boolean) { context.dataStore.edit { it[Keys.ERUDA_ENABLED] = enabled } }
     suspend fun setCustomHeaders(headers: String) { context.dataStore.edit { it[Keys.CUSTOM_HEADERS] = headers } }
+    suspend fun setUserScripts(json: String) { context.dataStore.edit { it[Keys.USER_SCRIPTS] = json } }
 }

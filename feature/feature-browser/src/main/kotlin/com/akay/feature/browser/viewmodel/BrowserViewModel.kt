@@ -64,6 +64,7 @@ class BrowserViewModel @Inject constructor(
     val desktopMode = preferences.isDesktopMode
     val fontSize = preferences.fontSize
     val customHeaders = preferences.customHeaders
+    val userScripts = preferences.userScripts
 
     private var searchEngineUrl: String = "https://www.google.com/search?q="
 
