@@ -34,6 +34,7 @@ class AxPreferences @Inject constructor(
         val FONT_SIZE = intPreferencesKey("font_size")
         val CLEAR_CACHE_ON_EXIT = booleanPreferencesKey("clear_cache_on_exit")
         val ERUDA_ENABLED = booleanPreferencesKey("eruda_enabled")
+        val CUSTOM_HEADERS = stringPreferencesKey("custom_headers")
     }
 
     val searchEngine: Flow<String> = context.dataStore.data.map { it[Keys.SEARCH_ENGINE] ?: "https://www.google.com/search?q=" }
@@ -49,6 +50,7 @@ class AxPreferences @Inject constructor(
     val fontSize: Flow<Int> = context.dataStore.data.map { it[Keys.FONT_SIZE] ?: 100 }
     val clearCacheOnExit: Flow<Boolean> = context.dataStore.data.map { it[Keys.CLEAR_CACHE_ON_EXIT] ?: false }
     val erudaEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.ERUDA_ENABLED] ?: false }
+    val customHeaders: Flow<String> = context.dataStore.data.map { it[Keys.CUSTOM_HEADERS] ?: "" }
 
     suspend fun setSearchEngine(url: String) { context.dataStore.edit { it[Keys.SEARCH_ENGINE] = url } }
     suspend fun setHomepage(url: String) { context.dataStore.edit { it[Keys.HOMEPAGE] = url } }
@@ -63,4 +65,5 @@ class AxPreferences @Inject constructor(
     suspend fun setFontSize(size: Int) { context.dataStore.edit { it[Keys.FONT_SIZE] = size } }
     suspend fun setClearCacheOnExit(enabled: Boolean) { context.dataStore.edit { it[Keys.CLEAR_CACHE_ON_EXIT] = enabled } }
     suspend fun setErudaEnabled(enabled: Boolean) { context.dataStore.edit { it[Keys.ERUDA_ENABLED] = enabled } }
+    suspend fun setCustomHeaders(headers: String) { context.dataStore.edit { it[Keys.CUSTOM_HEADERS] = headers } }
 }

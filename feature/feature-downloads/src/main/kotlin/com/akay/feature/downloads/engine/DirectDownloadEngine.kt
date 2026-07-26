@@ -44,8 +44,8 @@ class DirectDownloadEngine(private val client: OkHttpClient) {
         if (resumeFrom > 0) raf.seek(resumeFrom) else raf.setLength(0)
 
         try {
-            body.byteStream().use { input ->
-                val buffer = ByteArray(8192)
+            body.byteStream().buffered(1 shl 16).use { input ->
+                val buffer = ByteArray(1 shl 16) // 64 KiB
                 var bytes: Int
                 while (input.read(buffer).also { bytes = it } != -1) {
                     if (activeJobs[downloadId] == true) {

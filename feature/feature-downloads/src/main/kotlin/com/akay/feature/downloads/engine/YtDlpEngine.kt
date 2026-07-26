@@ -23,6 +23,11 @@ class YtDlpEngine(private val context: Context) {
             addOption("--no-playlist")
             addOption("--retries", "3")
             addOption("--fragment-retries", "3")
+            // Speed: download HLS/DASH fragments in parallel and use a large
+            // HTTP chunk size for progressive files.
+            addOption("--concurrent-fragments", "5")
+            addOption("--buffer-size", "16K")
+            addOption("--http-chunk-size", "10M")
             addOption("--no-warnings")
             addOption("--no-check-certificates")
             addOption("--newline")
