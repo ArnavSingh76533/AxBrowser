@@ -3,8 +3,10 @@ package com.akay.feature.browser.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.akay.core.data.datastore.AxPreferences
+import com.akay.core.domain.model.Bookmark
 import com.akay.core.domain.model.HistoryItem
 import com.akay.core.domain.model.Tab
+import com.akay.core.domain.repository.BookmarkRepository
 import com.akay.core.domain.repository.HistoryRepository
 import com.akay.core.domain.repository.TabRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -45,6 +47,7 @@ sealed class BrowserUiEvent {
 class BrowserViewModel @Inject constructor(
     private val tabRepository: TabRepository,
     private val historyRepository: HistoryRepository,
+    private val bookmarkRepository: BookmarkRepository,
     private val preferences: AxPreferences
 ) : ViewModel() {
 
@@ -55,9 +58,39 @@ class BrowserViewModel @Inject constructor(
     val events: StateFlow<BrowserUiEvent?> = _events.asStateFlow()
 
     val erudaEnabled = preferences.erudaEnabled
+    val adBlockEnabled = preferences.isAdBlockerEnabled
+    val httpsUpgradeEnabled = preferences.isHttpsUpgrade
+    val javascriptEnabled = preferences.isJavascriptEnabled
+    val desktopMode = preferences.isDesktopMode
+    val fontSize = preferences.fontSize
+
+    private var searchEngineUrl: String = "https://www.google.com/search?q="
 
     init {
         loadTabs()
+        viewModelScope.launch {
+            preferences.searchEngine.collect { searchEngineUrl = it }
+        }
+    }
+
+    fun setDesktopMode(enabled: Boolean) {
+        viewModelScope.launch { preferences.setDesktopMode(enabled) }
+    }
+
+    fun bookmarkCurrentPage(onDone: (Boolean) -> Unit) {
+        val state = _uiState.value
+        val url = state.displayUrl
+        if (url.isBlank() || url == "about:blank") {
+            onDone(false)
+            return
+        }
+        viewModelScope.launch {
+            runCatching {
+                bookmarkRepository.addBookmark(
+                    Bookmark(url = url, title = state.title.ifBlank { url })
+                )
+            }.onSuccess { onDone(true) }.onFailure { onDone(false) }
+        }
     }
 
     private fun loadTabs() {
@@ -129,7 +162,7 @@ class BrowserViewModel @Inject constructor(
             url.isBlank() -> return
             url.startsWith("http://") || url.startsWith("https://") || url.startsWith("about:") -> url
             url.contains(".") && !url.contains(" ") -> "https://$url"
-            else -> "https://www.google.com/search?q=${URLEncoder.encode(url, "UTF-8")}"
+            else -> "$searchEngineUrl${URLEncoder.encode(url, "UTF-8")}"
         }
         _uiState.value = _uiState.value.copy(url = processedUrl, displayUrl = processedUrl)
         viewModelScope.launch {

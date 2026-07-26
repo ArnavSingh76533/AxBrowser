@@ -1,6 +1,8 @@
 package com.akay.feature.settings.ui
 
-import android.content.Context
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -11,15 +13,24 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -30,13 +41,21 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.akay.core.ui.theme.Primary
+import com.akay.feature.settings.cookies.CookieTransfer
+import com.akay.feature.settings.viewmodel.SEARCH_ENGINES
 import com.akay.feature.settings.viewmodel.SettingsViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -46,6 +65,52 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
+
+    var showSearchEngineDialog by remember { mutableStateOf(false) }
+    var showClearDataDialog by remember { mutableStateOf(false) }
+    var showExportCookiesDialog by remember { mutableStateOf(false) }
+    var exportSite by remember { mutableStateOf("") }
+    var pendingCookieExport by remember { mutableStateOf<String?>(null) }
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain")
+    ) { uri ->
+        val text = pendingCookieExport
+        if (uri != null && text != null) {
+            runCatching {
+                context.contentResolver.openOutputStream(uri)?.use { out ->
+                    out.write(text.toByteArray())
+                }
+            }.onSuccess {
+                Toast.makeText(context, "Cookies exported", Toast.LENGTH_SHORT).show()
+            }.onFailure {
+                Toast.makeText(context, "Export failed: ${it.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+        pendingCookieExport = null
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    input.bufferedReader().readText()
+                } ?: ""
+            }.onSuccess { content ->
+                val count = CookieTransfer.importCookies(content)
+                Toast.makeText(
+                    context,
+                    if (count > 0) "Imported $count cookies" else "No cookies found in file",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }.onFailure {
+                Toast.makeText(context, "Import failed: ${it.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -76,15 +141,28 @@ fun SettingsScreen(
                 )
                 SettingsSwitchItem(
                     title = "Desktop Mode",
+                    subtitle = "Request desktop version of websites",
                     checked = uiState.isDesktopMode,
                     onCheckedChange = { viewModel.setDesktopMode(it) }
+                )
+                FontSizeItem(
+                    fontSize = uiState.fontSize,
+                    onFontSizeChange = { viewModel.setFontSize(it) }
+                )
+            }
+
+            SettingsSection(title = "Search") {
+                SettingsNavigationItem(
+                    title = "Search engine",
+                    subtitle = uiState.searchEngineName,
+                    onClick = { showSearchEngineDialog = true }
                 )
             }
 
             SettingsSection(title = "Privacy & Security") {
                 SettingsSwitchItem(
                     title = "Ad Blocker",
-                    subtitle = "Block ads and trackers",
+                    subtitle = "Block ads and trackers, like Brave shields",
                     checked = uiState.isAdBlockerEnabled,
                     onCheckedChange = { viewModel.setAdBlockerEnabled(it) }
                 )
@@ -100,24 +178,35 @@ fun SettingsScreen(
                     checked = uiState.isJavascriptEnabled,
                     onCheckedChange = { viewModel.setJavascriptEnabled(it) }
                 )
+                SettingsNavigationItem(
+                    title = "Clear browsing data",
+                    subtitle = "History, cookies and cache",
+                    onClick = { showClearDataDialog = true }
+                )
             }
 
-            SettingsSection(title = "Downloads") {
-                Text(
-                    text = "Max concurrent downloads: ${uiState.maxConcurrentDownloads}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+            SettingsSection(title = "Cookies") {
+                SettingsNavigationItem(
+                    title = "Export site cookies",
+                    subtitle = "Save a website's cookies as cookies.txt",
+                    onClick = { showExportCookiesDialog = true }
+                )
+                SettingsNavigationItem(
+                    title = "Import cookies",
+                    subtitle = "Load cookies from a cookies.txt file",
+                    onClick = {
+                        importLauncher.launch(arrayOf("text/plain", "text/*", "application/octet-stream"))
+                    }
                 )
             }
 
             SettingsSection(title = "Developer") {
                 SettingsSwitchItem(
                     title = "Dev Console / Eruda",
-                    subtitle = "Enable JavaScript console overlay",
+                    subtitle = "Inspect console, network requests and elements on pages",
                     checked = uiState.isErudaEnabled,
                     onCheckedChange = { viewModel.setErudaEnabled(it) }
                 )
-                val ctx = androidx.compose.ui.platform.LocalContext.current
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -129,7 +218,7 @@ fun SettingsScreen(
                         Text("yt-dlp Engine", style = MaterialTheme.typography.bodyMedium)
                         Text(
                             text = uiState.ytDlpUpdateStatus
-                                ?: com.akay.feature.downloads.engine.YtDlpSetup.statusString(ctx),
+                                ?: com.akay.feature.downloads.engine.YtDlpSetup.statusString(context),
                             style = MaterialTheme.typography.bodySmall,
                             color = if (uiState.ytDlpInstalled) Color(0xFF4CAF50)
                                     else MaterialTheme.colorScheme.error
@@ -151,6 +240,172 @@ fun SettingsScreen(
 
             Spacer(Modifier.height(32.dp))
         }
+    }
+
+    if (showSearchEngineDialog) {
+        AlertDialog(
+            onDismissRequest = { showSearchEngineDialog = false },
+            title = { Text("Search engine") },
+            text = {
+                Column {
+                    SEARCH_ENGINES.forEach { engine ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .selectable(
+                                    selected = uiState.searchEngineUrl == engine.url,
+                                    onClick = {
+                                        viewModel.setSearchEngine(engine.url)
+                                        showSearchEngineDialog = false
+                                    }
+                                )
+                                .padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = uiState.searchEngineUrl == engine.url,
+                                onClick = {
+                                    viewModel.setSearchEngine(engine.url)
+                                    showSearchEngineDialog = false
+                                }
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(engine.name, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showSearchEngineDialog = false }) { Text("Close") }
+            }
+        )
+    }
+
+    if (showClearDataDialog) {
+        ClearBrowsingDataDialog(
+            onDismiss = { showClearDataDialog = false },
+            onConfirm = { history, cookies, cache ->
+                showClearDataDialog = false
+                viewModel.clearBrowsingData(history, cookies, cache) {
+                    Toast.makeText(context, "Browsing data cleared", Toast.LENGTH_SHORT).show()
+                }
+            }
+        )
+    }
+
+    if (showExportCookiesDialog) {
+        AlertDialog(
+            onDismissRequest = { showExportCookiesDialog = false },
+            title = { Text("Export site cookies") },
+            text = {
+                Column {
+                    Text(
+                        "Enter the website whose cookies you want to export. " +
+                            "The file uses the standard cookies.txt format.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = exportSite,
+                        onValueChange = { exportSite = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("example.com") },
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = exportSite.isNotBlank(),
+                    onClick = {
+                        showExportCookiesDialog = false
+                        val text = CookieTransfer.exportCookies(exportSite)
+                        if (text == null) {
+                            Toast.makeText(context, "No cookies found for that site", Toast.LENGTH_SHORT).show()
+                        } else {
+                            pendingCookieExport = text
+                            val host = CookieTransfer.hostOf(exportSite) ?: "site"
+                            exportLauncher.launch("cookies_$host.txt")
+                        }
+                        exportSite = ""
+                    }
+                ) { Text("Export") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExportCookiesDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+}
+
+@Composable
+private fun ClearBrowsingDataDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (history: Boolean, cookies: Boolean, cache: Boolean) -> Unit
+) {
+    var clearHistory by remember { mutableStateOf(true) }
+    var clearCookies by remember { mutableStateOf(false) }
+    var clearCache by remember { mutableStateOf(true) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Clear browsing data") },
+        text = {
+            Column {
+                ClearDataRow("Browsing history", clearHistory) { clearHistory = it }
+                ClearDataRow("Cookies and site data", clearCookies) { clearCookies = it }
+                ClearDataRow("Cached files", clearCache) { clearCache = it }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = clearHistory || clearCookies || clearCache,
+                onClick = { onConfirm(clearHistory, clearCookies, clearCache) }
+            ) { Text("Clear", color = MaterialTheme.colorScheme.error) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}
+
+@Composable
+private fun ClearDataRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) }
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Checkbox(checked = checked, onCheckedChange = onCheckedChange)
+        Spacer(Modifier.width(8.dp))
+        Text(label, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
+private fun FontSizeItem(fontSize: Int, onFontSizeChange: (Int) -> Unit) {
+    var sliderValue by remember(fontSize) { mutableFloatStateOf(fontSize.toFloat()) }
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("Text size", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "${sliderValue.toInt()}%",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Slider(
+            value = sliderValue,
+            onValueChange = { sliderValue = it },
+            onValueChangeFinished = { onFontSizeChange(sliderValue.toInt()) },
+            valueRange = 75f..150f
+        )
     }
 }
 
@@ -202,6 +457,34 @@ fun SettingsSwitchItem(
                 checkedThumbColor  = Color.White,
                 checkedTrackColor  = Primary
             )
+        )
+    }
+}
+
+@Composable
+fun SettingsNavigationItem(
+    title: String,
+    subtitle: String = "",
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium)
+            if (subtitle.isNotBlank())
+                Text(subtitle, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Icon(
+            Icons.Default.ChevronRight, null,
+            modifier = Modifier.size(20.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }

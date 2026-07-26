@@ -3,7 +3,6 @@ package com.akay.feature.browser.ui
 import android.net.Uri
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -11,8 +10,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -52,13 +49,7 @@ fun BrowserNavHost() {
             if (showBottomBar) {
                 NavigationBar(
                     containerColor = MaterialTheme.colorScheme.surface,
-                    tonalElevation = 0.dp,
-                    modifier = Modifier.background(
-                        Brush.verticalGradient(
-                            colors = listOf(Color.Transparent, MaterialTheme.colorScheme.surface),
-                            startY = 0f, endY = Float.POSITIVE_INFINITY
-                        )
-                    )
+                    tonalElevation = 0.dp
                 ) {
                     bottomNavItems.forEach { item ->
                         val selected = currentRoute == item.route

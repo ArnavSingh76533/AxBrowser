@@ -6,6 +6,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import com.akay.feature.browser.adblock.AdBlockEngine
 import com.akay.feature.browser.devconsole.NetworkInterceptor
 import com.akay.feature.browser.devconsole.NetworkRequest
 import java.io.ByteArrayInputStream
@@ -15,8 +16,8 @@ class AxWebViewClient(
     private val onPageStarted: (url: String) -> Unit,
     private val onPageFinished: (url: String, title: String?) -> Unit,
     private val onError: (String) -> Unit,
-    private val adBlockerEnabled: Boolean = true,
-    private val httpsUpgradeEnabled: Boolean = true,
+    private val adBlockerEnabled: () -> Boolean = { true },
+    private val httpsUpgradeEnabled: () -> Boolean = { true },
     private val onMediaDetected: (url: String, mimeType: String?) -> Unit = { _, _ -> }
 ) : WebViewClient() {
 
@@ -41,7 +42,8 @@ class AxWebViewClient(
         )
         NetworkInterceptor.onRequest(netReq)
 
-        if (adBlockerEnabled && isBlocked(url)) {
+        if (adBlockerEnabled() && (AdBlockEngine.shouldBlock(url) || isBlocked(url))) {
+            AdBlockEngine.onBlocked()
             NetworkInterceptor.markBlocked(url)
             return WebResourceResponse("text/plain", "UTF-8", ByteArrayInputStream("".toByteArray()))
         }
@@ -64,7 +66,7 @@ class AxWebViewClient(
 
     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
         val url = request?.url?.toString() ?: return false
-        if (httpsUpgradeEnabled && url.startsWith("http://")) {
+        if (httpsUpgradeEnabled() && url.startsWith("http://")) {
             view?.loadUrl(url.replaceFirst("http://", "https://"))
             return true
         }
@@ -86,6 +88,7 @@ class AxWebViewClient(
     }
 
     private fun isBlocked(url: String): Boolean {
+        if (blockedDomains.isEmpty()) return false
         return try {
             val host = java.net.URI(url).host ?: return false
             blockedDomains.any { domain -> host == domain || host.endsWith(".$domain") }

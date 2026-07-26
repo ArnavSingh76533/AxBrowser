@@ -1,13 +1,19 @@
 package com.akay.feature.browser.ui
 
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.view.ViewGroup
+import android.webkit.URLUtil
 import android.webkit.WebView
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -18,15 +24,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.akay.core.ui.theme.Primary
+import com.akay.feature.browser.adblock.AdBlockEngine
 import com.akay.feature.browser.devconsole.DevConsolePanel
 import com.akay.feature.browser.devconsole.NetworkInterceptor
 import com.akay.feature.browser.viewmodel.BrowserViewModel
@@ -36,6 +46,9 @@ import com.akay.feature.downloads.ui.DetectedMediaUi
 import com.akay.feature.downloads.ui.MediaBottomSheet
 import com.akay.feature.downloads.viewmodel.DownloadViewModel
 
+private const val DESKTOP_USER_AGENT =
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
 @SuppressLint("SetJavaScriptEnabled")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,6 +57,7 @@ fun BrowserScreen(
     downloadViewModel: DownloadViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
     var isEditingUrl by remember { mutableStateOf(false) }
     var webView by remember { mutableStateOf<WebView?>(null) }
     var lastNavigatedUrl by remember { mutableStateOf("") }
@@ -51,14 +65,47 @@ fun BrowserScreen(
     var showMediaSheet by remember { mutableStateOf(false) }
     var showPasteLinkDialog by remember { mutableStateOf(false) }
     var pasteUrl by remember { mutableStateOf("") }
+    var showMenu by remember { mutableStateOf(false) }
+
+    // Find-in-page state
+    var findBarVisible by remember { mutableStateOf(false) }
+    var findQuery by remember { mutableStateOf("") }
+    var findActiveMatch by remember { mutableIntStateOf(0) }
+    var findTotalMatches by remember { mutableIntStateOf(0) }
 
     val networkMedia by NetworkInterceptor.detectedMedia.collectAsState()
-    val erudaEnabled by viewModel.erudaEnabled.collectAsState(initial = false)
-    val erudaEnabledState = remember { mutableStateOf(false) }
-    LaunchedEffect(erudaEnabled) { erudaEnabledState.value = erudaEnabled }
-    val mediaCount = uiState.detectedMediaCount + networkMedia.size
+    val blockedCount by AdBlockEngine.blockedCount.collectAsState()
 
+    // Preferences
+    val erudaEnabled by viewModel.erudaEnabled.collectAsState(initial = false)
+    val adBlockOn by viewModel.adBlockEnabled.collectAsState(initial = true)
+    val httpsUpgradeOn by viewModel.httpsUpgradeEnabled.collectAsState(initial = true)
+    val jsEnabled by viewModel.javascriptEnabled.collectAsState(initial = true)
+    val desktopMode by viewModel.desktopMode.collectAsState(initial = false)
+    val fontSize by viewModel.fontSize.collectAsState(initial = 100)
+
+    val erudaEnabledState = rememberUpdatedState(erudaEnabled)
+    val adBlockOnState = rememberUpdatedState(adBlockOn)
+    val httpsUpgradeOnState = rememberUpdatedState(httpsUpgradeOn)
+
+    var appliedDesktopMode by remember { mutableStateOf<Boolean?>(null) }
+
+    LaunchedEffect(Unit) { AdBlockEngine.ensureLoaded(context) }
+
+    val mediaCount = uiState.detectedMediaCount + networkMedia.size
     val isNewTab = uiState.url.isBlank() || uiState.url == "about:blank"
+
+    // System back: close overlays first, then navigate the page back.
+    BackHandler(enabled = findBarVisible || uiState.showTabSwitcher || uiState.canGoBack) {
+        when {
+            findBarVisible -> {
+                findBarVisible = false
+                webView?.clearMatches()
+            }
+            uiState.showTabSwitcher -> viewModel.toggleTabSwitcher()
+            webView?.canGoBack() == true -> webView?.goBack()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -67,11 +114,12 @@ fun BrowserScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(MaterialTheme.colorScheme.surface)
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(
                         onClick = { webView?.goBack() },
+                        enabled = uiState.canGoBack,
                         modifier = Modifier.size(36.dp)
                     ) {
                         Icon(
@@ -128,28 +176,36 @@ fun BrowserScreen(
                                     tint = if (uiState.displayUrl.startsWith("https"))
                                         Color(0xFF4CAF50) else MaterialTheme.colorScheme.error
                                 )
-                                Spacer(Modifier.width(5.dp))
+                                Spacer(Modifier.width(6.dp))
                                 Text(
                                     text = prettifyUrl(uiState.displayUrl),
                                     style = MaterialTheme.typography.bodySmall,
                                     maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
                                 )
+                                if (adBlockOn && blockedCount > 0) {
+                                    Spacer(Modifier.width(6.dp))
+                                    Surface(
+                                        shape = MaterialTheme.shapes.small,
+                                        color = Primary.copy(alpha = 0.15f)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Shield, null,
+                                                modifier = Modifier.size(10.dp), tint = Primary
+                                            )
+                                            Spacer(Modifier.width(3.dp))
+                                            Text("$blockedCount", fontSize = 10.sp, color = Primary,
+                                                fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
                             }
                         }
-                    }
-
-                    IconButton(
-                        onClick = { webView?.goForward() },
-                        modifier = Modifier.size(36.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.ArrowForward, "Forward",
-                            modifier = Modifier.size(20.dp),
-                            tint = MaterialTheme.colorScheme.onSurface.copy(
-                                alpha = if (uiState.canGoForward) 1f else 0.3f
-                            )
-                        )
                     }
 
                     IconButton(
@@ -166,12 +222,88 @@ fun BrowserScreen(
                         }
                     }
 
-                    IconButton(
+                    // Tab counter -> tab switcher
+                    Surface(
                         onClick = { viewModel.toggleTabSwitcher() },
-                        modifier = Modifier.size(36.dp)
+                        shape = RoundedCornerShape(7.dp),
+                        color = Color.Transparent,
+                        border = BorderStroke(1.6.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)),
+                        modifier = Modifier.size(26.dp)
                     ) {
-                        Icon(Icons.Default.Menu, "Menu", modifier = Modifier.size(20.dp))
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                text = uiState.tabs.size.coerceAtLeast(1).toString(),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center
+                            )
+                        }
                     }
+
+                    Box {
+                        IconButton(
+                            onClick = { showMenu = true },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(Icons.Default.MoreVert, "Menu", modifier = Modifier.size(20.dp))
+                        }
+                        BrowserOverflowMenu(
+                            expanded = showMenu,
+                            onDismiss = { showMenu = false },
+                            canGoForward = uiState.canGoForward,
+                            desktopMode = desktopMode,
+                            blockedCount = blockedCount,
+                            adBlockOn = adBlockOn,
+                            onForward = { webView?.goForward() },
+                            onNewTab = { viewModel.createNewTab() },
+                            onAddBookmark = {
+                                viewModel.bookmarkCurrentPage { ok ->
+                                    Toast.makeText(
+                                        context,
+                                        if (ok) "Bookmark added" else "Nothing to bookmark",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            },
+                            onShare = {
+                                val url = uiState.displayUrl
+                                if (url.isNotBlank() && url != "about:blank") {
+                                    val send = Intent(Intent.ACTION_SEND).apply {
+                                        type = "text/plain"
+                                        putExtra(Intent.EXTRA_TEXT, url)
+                                        putExtra(Intent.EXTRA_SUBJECT, uiState.title)
+                                    }
+                                    context.startActivity(Intent.createChooser(send, "Share page"))
+                                }
+                            },
+                            onFindInPage = {
+                                findBarVisible = true
+                                findQuery = ""
+                                findActiveMatch = 0
+                                findTotalMatches = 0
+                            },
+                            onToggleDesktop = { viewModel.setDesktopMode(!desktopMode) },
+                            onDevConsole = { viewModel.toggleDevConsole() }
+                        )
+                    }
+                }
+
+                AnimatedVisibility(visible = findBarVisible) {
+                    FindInPageBar(
+                        query = findQuery,
+                        activeMatch = findActiveMatch,
+                        totalMatches = findTotalMatches,
+                        onQueryChange = { q ->
+                            findQuery = q
+                            if (q.isBlank()) webView?.clearMatches() else webView?.findAllAsync(q)
+                        },
+                        onPrev = { webView?.findNext(false) },
+                        onNext = { webView?.findNext(true) },
+                        onClose = {
+                            findBarVisible = false
+                            webView?.clearMatches()
+                        }
+                    )
                 }
 
                 AnimatedVisibility(
@@ -218,9 +350,21 @@ fun BrowserScreen(
                             settings.displayZoomControls = false
                             setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
 
+                            setDownloadListener { url, _, contentDisposition, mimetype, _ ->
+                                val filename = URLUtil.guessFileName(url, contentDisposition, mimetype)
+                                downloadViewModel.enqueue(url = url, filename = filename, useYtDlp = false)
+                                Toast.makeText(ctx, "Downloading $filename", Toast.LENGTH_SHORT).show()
+                            }
+
+                            setFindListener { activeMatchOrdinal, numberOfMatches, _ ->
+                                findActiveMatch = if (numberOfMatches > 0) activeMatchOrdinal + 1 else 0
+                                findTotalMatches = numberOfMatches
+                            }
+
                             webViewClient = AxWebViewClient(
                                 context = ctx,
                                 onPageStarted = { url ->
+                                    AdBlockEngine.resetCounter()
                                     viewModel.updateUrl(url)
                                     viewModel.updateNavigationState(
                                         isLoading = true,
@@ -240,10 +384,15 @@ fun BrowserScreen(
                                         viewModel.recordHistory(url, title ?: url)
                                     }
                                     if (erudaEnabledState.value) {
-                                        val js = runCatching {
+                                        val lib = runCatching {
+                                            ctx.assets.open("js/eruda.min.js").bufferedReader().readText()
+                                        }.getOrNull()
+                                        val init = runCatching {
                                             ctx.assets.open("js/eruda_init.js").bufferedReader().readText()
                                         }.getOrNull()
-                                        js?.let { evaluateJavascript(it, null) }
+                                        if (lib != null && init != null) {
+                                            evaluateJavascript(lib) { evaluateJavascript(init, null) }
+                                        }
                                     }
                                     val scanJs = runCatching {
                                         ctx.assets.open("js/media_scanner.js").bufferedReader().readText()
@@ -257,6 +406,8 @@ fun BrowserScreen(
                                     }
                                 },
                                 onError = { viewModel.updateTitle("Error") },
+                                adBlockerEnabled = { adBlockOnState.value },
+                                httpsUpgradeEnabled = { httpsUpgradeOnState.value },
                                 onMediaDetected = { url, mime ->
                                     NetworkInterceptor.onRequest(
                                         com.akay.feature.browser.devconsole.NetworkRequest(url = url, mimeType = mime)
@@ -275,6 +426,16 @@ fun BrowserScreen(
                         }
                     },
                     update = { wv ->
+                        wv.settings.javaScriptEnabled = jsEnabled
+                        if (wv.settings.textZoom != fontSize) {
+                            wv.settings.textZoom = fontSize
+                        }
+                        if (appliedDesktopMode != desktopMode) {
+                            val firstApply = appliedDesktopMode == null
+                            appliedDesktopMode = desktopMode
+                            wv.settings.userAgentString = if (desktopMode) DESKTOP_USER_AGENT else null
+                            if (!firstApply) wv.reload()
+                        }
                         if (uiState.url.isNotEmpty() && uiState.url != lastNavigatedUrl) {
                             lastNavigatedUrl = uiState.url
                             wv.loadUrl(uiState.url)
@@ -358,17 +519,6 @@ fun BrowserScreen(
                         Icon(Icons.Default.Link, "Paste Link",
                             tint = MaterialTheme.colorScheme.primary)
                     }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    FloatingActionButton(
-                        onClick = { viewModel.createNewTab() },
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = CircleShape
-                    ) {
-                        Icon(Icons.Default.Add, "New Tab",
-                            tint = MaterialTheme.colorScheme.onSurface)
-                    }
                 }
             }
         }
@@ -414,7 +564,7 @@ fun BrowserScreen(
                 onDownload = {
                     showPasteLinkDialog = false
                     if (pasteUrl.isNotBlank()) {
-                        downloadViewModel.enqueue(url = pasteUrl, filename = "%(title)s.%(ext)s", useYtDlp = true)
+                        downloadViewModel.enqueueWithQualityPicker(pasteUrl)
                         pasteUrl = ""
                     }
                 },
@@ -436,6 +586,129 @@ fun BrowserScreen(
 }
 
 @Composable
+private fun BrowserOverflowMenu(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    canGoForward: Boolean,
+    desktopMode: Boolean,
+    blockedCount: Int,
+    adBlockOn: Boolean,
+    onForward: () -> Unit,
+    onNewTab: () -> Unit,
+    onAddBookmark: () -> Unit,
+    onShare: () -> Unit,
+    onFindInPage: () -> Unit,
+    onToggleDesktop: () -> Unit,
+    onDevConsole: () -> Unit
+) {
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        if (adBlockOn) {
+            DropdownMenuItem(
+                text = {
+                    Text(
+                        if (blockedCount == 1) "1 ad blocked on this page"
+                        else "$blockedCount ads blocked on this page",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Primary
+                    )
+                },
+                leadingIcon = { Icon(Icons.Default.Shield, null, tint = Primary) },
+                onClick = onDismiss,
+                enabled = false
+            )
+            HorizontalDivider()
+        }
+        DropdownMenuItem(
+            text = { Text("Forward") },
+            leadingIcon = { Icon(Icons.Default.ArrowForward, null) },
+            enabled = canGoForward,
+            onClick = { onDismiss(); onForward() }
+        )
+        DropdownMenuItem(
+            text = { Text("New tab") },
+            leadingIcon = { Icon(Icons.Default.Add, null) },
+            onClick = { onDismiss(); onNewTab() }
+        )
+        DropdownMenuItem(
+            text = { Text("Add bookmark") },
+            leadingIcon = { Icon(Icons.Default.StarBorder, null) },
+            onClick = { onDismiss(); onAddBookmark() }
+        )
+        DropdownMenuItem(
+            text = { Text("Share page") },
+            leadingIcon = { Icon(Icons.Default.Share, null) },
+            onClick = { onDismiss(); onShare() }
+        )
+        DropdownMenuItem(
+            text = { Text("Find in page") },
+            leadingIcon = { Icon(Icons.Default.Search, null) },
+            onClick = { onDismiss(); onFindInPage() }
+        )
+        DropdownMenuItem(
+            text = { Text("Desktop site") },
+            leadingIcon = { Icon(Icons.Default.Computer, null) },
+            trailingIcon = {
+                if (desktopMode) Icon(Icons.Default.Check, null, tint = Primary)
+            },
+            onClick = { onDismiss(); onToggleDesktop() }
+        )
+        HorizontalDivider()
+        DropdownMenuItem(
+            text = { Text("Dev console") },
+            leadingIcon = { Icon(Icons.Default.BugReport, null) },
+            onClick = { onDismiss(); onDevConsole() }
+        )
+    }
+}
+
+@Composable
+private fun FindInPageBar(
+    query: String,
+    activeMatch: Int,
+    totalMatches: Int,
+    onQueryChange: (String) -> Unit,
+    onPrev: () -> Unit,
+    onNext: () -> Unit,
+    onClose: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        OutlinedTextField(
+            value = query,
+            onValueChange = onQueryChange,
+            modifier = Modifier.weight(1f),
+            singleLine = true,
+            placeholder = { Text("Find in page", style = MaterialTheme.typography.bodySmall) },
+            textStyle = MaterialTheme.typography.bodySmall,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Primary,
+                unfocusedBorderColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = if (totalMatches > 0) "$activeMatch/$totalMatches" else "0/0",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        IconButton(onClick = onPrev, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Default.KeyboardArrowUp, "Previous", modifier = Modifier.size(20.dp))
+        }
+        IconButton(onClick = onNext, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Default.KeyboardArrowDown, "Next", modifier = Modifier.size(20.dp))
+        }
+        IconButton(onClick = onClose, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Default.Close, "Close", modifier = Modifier.size(20.dp))
+        }
+    }
+}
+
+@Composable
 fun PasteLinkDialog(
     url: String,
     onUrlChange: (String) -> Unit,
@@ -449,7 +722,7 @@ fun PasteLinkDialog(
         title = { Text("Paste Link") },
         text = {
             Column {
-                Text("Enter a URL to open or download",
+                Text("Enter a URL to open, or download it with quality selection",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(modifier = Modifier.height(12.dp))

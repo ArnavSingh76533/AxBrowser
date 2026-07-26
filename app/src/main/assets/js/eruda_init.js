@@ -1,9 +1,9 @@
-if (typeof eruda === 'undefined') {
-    var script = document.createElement('script');
-    script.src = 'https://cdn.jsdelivr.net/npm/eruda';
-    script.onload = function() {
+(function () {
+    if (typeof eruda === 'undefined') return;
+    if (!window.__axErudaInit) {
+        window.__axErudaInit = true;
         eruda.init({
-            tool: ['console', 'elements', 'network', 'resources', 'info'],
+            tool: ['console', 'elements', 'network', 'resources', 'sources', 'info'],
             useShadowDom: true,
             autoScale: true,
             defaults: {
@@ -12,8 +12,5 @@ if (typeof eruda === 'undefined') {
                 theme: 'Dark'
             }
         });
-    };
-    document.head.appendChild(script);
-} else {
-    eruda.show();
-}
+    }
+})();
