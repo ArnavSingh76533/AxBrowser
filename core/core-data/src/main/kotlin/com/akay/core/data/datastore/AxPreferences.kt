@@ -36,6 +36,11 @@ class AxPreferences @Inject constructor(
         val ERUDA_ENABLED = booleanPreferencesKey("eruda_enabled")
         val CUSTOM_HEADERS = stringPreferencesKey("custom_headers")
         val USER_SCRIPTS = stringPreferencesKey("user_scripts")
+        val ACCENT_COLOR = stringPreferencesKey("accent_color")
+        val AMOLED_THEME = booleanPreferencesKey("amoled_theme")
+        val GALAXY_ENABLED = booleanPreferencesKey("galaxy_enabled")
+        val ANIMATION_INTENSITY = intPreferencesKey("animation_intensity")
+        val DARK_MODE_WEBSITES = booleanPreferencesKey("dark_mode_websites")
     }
 
     val searchEngine: Flow<String> = context.dataStore.data.map { it[Keys.SEARCH_ENGINE] ?: "https://www.google.com/search?q=" }
@@ -53,6 +58,11 @@ class AxPreferences @Inject constructor(
     val erudaEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.ERUDA_ENABLED] ?: false }
     val customHeaders: Flow<String> = context.dataStore.data.map { it[Keys.CUSTOM_HEADERS] ?: "" }
     val userScripts: Flow<String> = context.dataStore.data.map { it[Keys.USER_SCRIPTS] ?: "" }
+    val accentColor: Flow<String> = context.dataStore.data.map { it[Keys.ACCENT_COLOR] ?: "Nebula Violet" }
+    val amoledTheme: Flow<Boolean> = context.dataStore.data.map { it[Keys.AMOLED_THEME] ?: true }
+    val galaxyEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.GALAXY_ENABLED] ?: true }
+    val animationIntensity: Flow<Int> = context.dataStore.data.map { it[Keys.ANIMATION_INTENSITY] ?: 100 }
+    val darkModeForWebsites: Flow<Boolean> = context.dataStore.data.map { it[Keys.DARK_MODE_WEBSITES] ?: false }
 
     suspend fun setSearchEngine(url: String) { context.dataStore.edit { it[Keys.SEARCH_ENGINE] = url } }
     suspend fun setHomepage(url: String) { context.dataStore.edit { it[Keys.HOMEPAGE] = url } }
@@ -69,4 +79,9 @@ class AxPreferences @Inject constructor(
     suspend fun setErudaEnabled(enabled: Boolean) { context.dataStore.edit { it[Keys.ERUDA_ENABLED] = enabled } }
     suspend fun setCustomHeaders(headers: String) { context.dataStore.edit { it[Keys.CUSTOM_HEADERS] = headers } }
     suspend fun setUserScripts(json: String) { context.dataStore.edit { it[Keys.USER_SCRIPTS] = json } }
+    suspend fun setAccentColor(name: String) { context.dataStore.edit { it[Keys.ACCENT_COLOR] = name } }
+    suspend fun setAmoledTheme(enabled: Boolean) { context.dataStore.edit { it[Keys.AMOLED_THEME] = enabled } }
+    suspend fun setGalaxyEnabled(enabled: Boolean) { context.dataStore.edit { it[Keys.GALAXY_ENABLED] = enabled } }
+    suspend fun setAnimationIntensity(value: Int) { context.dataStore.edit { it[Keys.ANIMATION_INTENSITY] = value } }
+    suspend fun setDarkModeForWebsites(enabled: Boolean) { context.dataStore.edit { it[Keys.DARK_MODE_WEBSITES] = enabled } }
 }

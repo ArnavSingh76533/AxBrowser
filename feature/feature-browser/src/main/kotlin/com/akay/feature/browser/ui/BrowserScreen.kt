@@ -112,6 +112,7 @@ fun BrowserScreen(
     val jsEnabled by viewModel.javascriptEnabled.collectAsState(initial = true)
     val desktopMode by viewModel.desktopMode.collectAsState(initial = false)
     val fontSize by viewModel.fontSize.collectAsState(initial = 100)
+    val darkWebsites by viewModel.darkModeForWebsites.collectAsState(initial = false)
     val customHeadersRaw by viewModel.customHeaders.collectAsState(initial = "")
     val userScriptsRaw by viewModel.userScripts.collectAsState(initial = "")
     val userScripts = remember(userScriptsRaw) {
@@ -547,6 +548,12 @@ fun BrowserScreen(
                         if (wv.settings.textZoom != fontSize) {
                             wv.settings.textZoom = fontSize
                         }
+                        @Suppress("DEPRECATION")
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                            wv.settings.forceDark = if (darkWebsites)
+                                android.webkit.WebSettings.FORCE_DARK_ON
+                            else android.webkit.WebSettings.FORCE_DARK_OFF
+                        }
                         if (appliedDesktopMode != desktopMode) {
                             val firstApply = appliedDesktopMode == null
                             appliedDesktopMode = desktopMode
@@ -574,7 +581,7 @@ fun BrowserScreen(
                     activeTabId = uiState.activeTab?.id,
                     onTabClick = { viewModel.setActiveTab(it) },
                     onCloseTab = { viewModel.closeTab(it) },
-                    onNewTab = { viewModel.createNewTab() },
+                    onNewTab = { incognito -> viewModel.createNewTab(incognito = incognito) },
                     modifier = Modifier.fillMaxSize()
                 )
             }

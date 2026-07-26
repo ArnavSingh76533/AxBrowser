@@ -4,8 +4,10 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -53,7 +56,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.akay.core.ui.components.GalaxyBackground
+import com.akay.core.ui.theme.AccentColors
 import com.akay.core.ui.theme.Primary
+import com.akay.core.ui.theme.accentByName
 import com.akay.feature.settings.cookies.CookieTransfer
 import com.akay.feature.settings.viewmodel.SEARCH_ENGINES
 import com.akay.feature.settings.viewmodel.SettingsViewModel
@@ -72,6 +78,7 @@ fun SettingsScreen(
     var showClearDataDialog by remember { mutableStateOf(false) }
     var showExportCookiesDialog by remember { mutableStateOf(false) }
     var showHeadersDialog by remember { mutableStateOf(false) }
+    var showAccentDialog by remember { mutableStateOf(false) }
     var exportSite by remember { mutableStateOf("") }
     var pendingCookieExport by remember { mutableStateOf<String?>(null) }
 
@@ -123,12 +130,12 @@ fun SettingsScreen(
                         Icon(Icons.Default.ArrowBack, "Back")
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                )
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )
-        }
+        },
+        containerColor = Color.Transparent
     ) { paddingValues ->
+      GalaxyBackground(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -136,13 +143,52 @@ fun SettingsScreen(
                 .verticalScroll(rememberScrollState())
         ) {
             SettingsSection(title = "Appearance") {
+                SettingsNavigationItem(
+                    title = "Accent color",
+                    subtitle = uiState.accentName,
+                    trailing = {
+                        Box(
+                            modifier = Modifier
+                                .size(22.dp)
+                                .background(accentByName(uiState.accentName), CircleShape)
+                        )
+                    },
+                    onClick = { showAccentDialog = true }
+                )
                 SettingsSwitchItem(
-                    title = "Dark Mode",
+                    title = "AMOLED black",
+                    subtitle = "Pure-black background to save battery",
+                    checked = uiState.amoled,
+                    onCheckedChange = { viewModel.setAmoled(it) }
+                )
+                SettingsSwitchItem(
+                    title = "Dark mode",
                     checked = uiState.isDarkMode,
                     onCheckedChange = { viewModel.setDarkMode(it) }
                 )
                 SettingsSwitchItem(
-                    title = "Desktop Mode",
+                    title = "Animated galaxy background",
+                    subtitle = "Twinkling starfield and nebulas",
+                    checked = uiState.galaxyEnabled,
+                    onCheckedChange = { viewModel.setGalaxyEnabled(it) }
+                )
+                if (uiState.galaxyEnabled) {
+                    LabeledSlider(
+                        label = "Animation intensity",
+                        value = uiState.animationIntensity,
+                        range = 20..100,
+                        suffix = "%",
+                        onChange = { viewModel.setAnimationIntensity(it) }
+                    )
+                }
+                SettingsSwitchItem(
+                    title = "Dark mode for websites",
+                    subtitle = "Ask pages to render dark",
+                    checked = uiState.darkModeForWebsites,
+                    onCheckedChange = { viewModel.setDarkModeForWebsites(it) }
+                )
+                SettingsSwitchItem(
+                    title = "Desktop mode",
                     subtitle = "Request desktop version of websites",
                     checked = uiState.isDesktopMode,
                     onCheckedChange = { viewModel.setDesktopMode(it) }
@@ -256,6 +302,7 @@ fun SettingsScreen(
 
             Spacer(Modifier.height(32.dp))
         }
+      }
     }
 
     if (showSearchEngineDialog) {
@@ -306,6 +353,38 @@ fun SettingsScreen(
                     Toast.makeText(context, "Browsing data cleared", Toast.LENGTH_SHORT).show()
                 }
             }
+        )
+    }
+
+    if (showAccentDialog) {
+        AlertDialog(
+            onDismissRequest = { showAccentDialog = false },
+            title = { Text("Accent color") },
+            text = {
+                Column {
+                    AccentColors.forEach { opt ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .selectable(
+                                    selected = uiState.accentName == opt.name,
+                                    onClick = { viewModel.setAccent(opt.name); showAccentDialog = false }
+                                )
+                                .padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(modifier = Modifier.size(28.dp).background(opt.color, CircleShape))
+                            Spacer(Modifier.width(16.dp))
+                            Text(opt.name, style = MaterialTheme.typography.bodyLarge,
+                                modifier = Modifier.weight(1f))
+                            if (uiState.accentName == opt.name) {
+                                Icon(Icons.Default.ChevronRight, null, tint = opt.color)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showAccentDialog = false }) { Text("Close") } }
         )
     }
 
@@ -526,6 +605,7 @@ fun SettingsSwitchItem(
 fun SettingsNavigationItem(
     title: String,
     subtitle: String = "",
+    trailing: (@Composable () -> Unit)? = null,
     onClick: () -> Unit
 ) {
     Row(
@@ -542,10 +622,38 @@ fun SettingsNavigationItem(
                 Text(subtitle, style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        if (trailing != null) {
+            trailing()
+            Spacer(Modifier.width(12.dp))
+        }
         Icon(
             Icons.Default.ChevronRight, null,
             modifier = Modifier.size(20.dp),
             tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+fun LabeledSlider(
+    label: String,
+    value: Int,
+    range: IntRange,
+    suffix: String = "",
+    onChange: (Int) -> Unit
+) {
+    var sliderValue by remember(value) { mutableFloatStateOf(value.toFloat()) }
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+            Text("${sliderValue.toInt()}$suffix", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Slider(
+            value = sliderValue,
+            onValueChange = { sliderValue = it },
+            onValueChangeFinished = { onChange(sliderValue.toInt()) },
+            valueRange = range.first.toFloat()..range.last.toFloat()
         )
     }
 }

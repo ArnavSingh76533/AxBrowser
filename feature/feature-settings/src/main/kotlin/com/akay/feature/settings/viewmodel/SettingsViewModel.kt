@@ -44,7 +44,12 @@ data class SettingsUiState(
     val ytDlpInstalled: Boolean = false,
     val ytDlpUpdateStatus: String? = null,
     val searchEngineUrl: String = SEARCH_ENGINES.first().url,
-    val customHeaders: String = ""
+    val customHeaders: String = "",
+    val amoled: Boolean = true,
+    val accentName: String = "Nebula Violet",
+    val galaxyEnabled: Boolean = true,
+    val animationIntensity: Int = 100,
+    val darkModeForWebsites: Boolean = false
 ) {
     val searchEngineName: String
         get() = SEARCH_ENGINES.firstOrNull { it.url == searchEngineUrl }?.name ?: "Custom"
@@ -144,10 +149,31 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             preferences.customHeaders.collect { _uiState.value = _uiState.value.copy(customHeaders = it) }
         }
+        viewModelScope.launch {
+            preferences.amoledTheme.collect { _uiState.value = _uiState.value.copy(amoled = it) }
+        }
+        viewModelScope.launch {
+            preferences.accentColor.collect { _uiState.value = _uiState.value.copy(accentName = it) }
+        }
+        viewModelScope.launch {
+            preferences.galaxyEnabled.collect { _uiState.value = _uiState.value.copy(galaxyEnabled = it) }
+        }
+        viewModelScope.launch {
+            preferences.animationIntensity.collect { _uiState.value = _uiState.value.copy(animationIntensity = it) }
+        }
+        viewModelScope.launch {
+            preferences.darkModeForWebsites.collect { _uiState.value = _uiState.value.copy(darkModeForWebsites = it) }
+        }
         _uiState.value = _uiState.value.copy(
             ytDlpInstalled = YtDlpSetup.isInstalled(context)
         )
     }
+
+    fun setAmoled(enabled: Boolean) { viewModelScope.launch { preferences.setAmoledTheme(enabled) } }
+    fun setAccent(name: String) { viewModelScope.launch { preferences.setAccentColor(name) } }
+    fun setGalaxyEnabled(enabled: Boolean) { viewModelScope.launch { preferences.setGalaxyEnabled(enabled) } }
+    fun setAnimationIntensity(value: Int) { viewModelScope.launch { preferences.setAnimationIntensity(value) } }
+    fun setDarkModeForWebsites(enabled: Boolean) { viewModelScope.launch { preferences.setDarkModeForWebsites(enabled) } }
 
     fun setDarkMode(enabled: Boolean) { viewModelScope.launch { preferences.setDarkMode(enabled) } }
     fun setAdBlockerEnabled(enabled: Boolean) { viewModelScope.launch { preferences.setAdBlockerEnabled(enabled) } }
