@@ -121,7 +121,6 @@ class YtDlpEngine(private val context: Context) {
                 val id  = fmt.formatId ?: return@mapNotNull null
                 val ext = fmt.ext ?: "mp4"
                 val h   = fmt.height ?: 0
-                val size = fmt.filesize ?: fmt.filesizeApprox ?: 0L
 
                 val isVideoOnly = fmt.vcodec?.isNotEmpty() == true && (fmt.acodec == null || fmt.acodec == "none")
                 val isAudioOnly = (fmt.vcodec == null || fmt.vcodec == "none") && fmt.acodec?.isNotEmpty() == true
@@ -134,7 +133,7 @@ class YtDlpEngine(private val context: Context) {
 
                 VideoFormat(
                     formatId = id, label = label, ext = ext,
-                    fileSizeBytes = size, height = h, isAudioOnly = isAudioOnly
+                    fileSizeBytes = 0L, height = h, isAudioOnly = isAudioOnly
                 )
             }
             .distinctBy { it.label }
