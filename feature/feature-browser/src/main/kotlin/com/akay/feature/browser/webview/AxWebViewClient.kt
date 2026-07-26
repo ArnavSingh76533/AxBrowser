@@ -9,7 +9,11 @@ import android.webkit.WebViewClient
 import com.akay.feature.browser.adblock.AdBlockEngine
 import com.akay.feature.browser.devconsole.NetworkInterceptor
 import com.akay.feature.browser.devconsole.NetworkRequest
+import com.akay.feature.browser.devconsole.RuleAction
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import java.io.ByteArrayInputStream
+import java.util.concurrent.TimeUnit
 
 class AxWebViewClient(
     private val context: Context,
@@ -22,6 +26,14 @@ class AxWebViewClient(
 ) : WebViewClient() {
 
     private val blockedDomains = mutableSetOf<String>()
+
+    private val interceptorClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .build()
+    }
 
     private val videoExtensions = listOf(".mp4", ".webm", ".mkv", ".avi", ".mov", ".m3u8", ".mpd", ".ts", ".flv")
     private val audioExtensions = listOf(".mp3", ".m4a", ".aac", ".ogg", ".wav", ".flac", ".opus")
@@ -43,9 +55,26 @@ class AxWebViewClient(
         NetworkInterceptor.onRequest(netReq)
 
         // User-defined interceptor rules always apply (independent of ad blocker).
-        if (NetworkInterceptor.isUserBlocked(url)) {
-            NetworkInterceptor.markBlocked(url)
-            return WebResourceResponse("text/plain", "UTF-8", ByteArrayInputStream("".toByteArray()))
+        val rule = NetworkInterceptor.matchRule(url)
+        if (rule != null) {
+            when (rule.action) {
+                RuleAction.BLOCK -> {
+                    NetworkInterceptor.markBlocked(url)
+                    return WebResourceResponse("text/plain", "UTF-8", ByteArrayInputStream("".toByteArray()))
+                }
+                RuleAction.REDIRECT -> {
+                    val target = rule.value.trim()
+                    if (target.isNotEmpty()) fetchModified(target, req.requestHeaders, null)?.let { return it }
+                }
+                RuleAction.ADD_HEADER -> {
+                    val idx = rule.value.indexOf(':')
+                    if (idx > 0) {
+                        val hName = rule.value.substring(0, idx).trim()
+                        val hVal = rule.value.substring(idx + 1).trim()
+                        fetchModified(url, req.requestHeaders, hName to hVal)?.let { return it }
+                    }
+                }
+            }
         }
 
         if (adBlockerEnabled() && (AdBlockEngine.shouldBlock(url) || isBlocked(url))) {
@@ -91,6 +120,32 @@ class AxWebViewClient(
 
     override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
         onError(description ?: "Unknown error")
+    }
+
+    /**
+     * Fetches [url] with OkHttp, optionally injecting one extra header, and
+     * returns it as a WebResourceResponse so the interceptor can redirect or
+     * modify a request. Returns null on any failure so the page still loads.
+     */
+    private fun fetchModified(
+        url: String,
+        originalHeaders: Map<String, String>?,
+        extraHeader: Pair<String, String>?
+    ): WebResourceResponse? = try {
+        val builder = Request.Builder().url(url).get()
+        originalHeaders?.forEach { (k, v) ->
+            if (!k.equals("Accept-Encoding", ignoreCase = true)) runCatching { builder.header(k, v) }
+        }
+        extraHeader?.let { builder.header(it.first, it.second) }
+        val response = interceptorClient.newCall(builder.build()).execute()
+        val body = response.body ?: return null
+        val contentType = response.header("Content-Type") ?: "application/octet-stream"
+        val mime = contentType.substringBefore(";").trim().ifEmpty { "application/octet-stream" }
+        val charset = contentType.substringAfter("charset=", "UTF-8").substringBefore(";").trim().ifEmpty { "UTF-8" }
+        NetworkInterceptor.markBlocked(url) // mark as intercepted in the log
+        WebResourceResponse(mime, charset, body.byteStream())
+    } catch (_: Exception) {
+        null
     }
 
     private fun isBlocked(url: String): Boolean {

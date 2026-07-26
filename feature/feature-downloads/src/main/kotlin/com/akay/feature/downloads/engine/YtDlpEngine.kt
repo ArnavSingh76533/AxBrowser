@@ -120,40 +120,55 @@ class YtDlpEngine(private val context: Context) {
     }
 
     /**
-     * Fetches the title and the available formats in a SINGLE yt-dlp call, on
-     * the IO dispatcher. Previously the quality picker made two separate
-     * blocking calls (one of them on the main thread), which froze the UI and
-     * crashed. A timeout guards against hangs on unsupported URLs.
+     * Fetches the title and available formats in a SINGLE yt-dlp call, on the
+     * IO dispatcher, while streaming yt-dlp's own extraction log lines to
+     * [onLog] so the UI can show what's happening in real time. A timeout
+     * guards against hangs on unsupported URLs.
      */
-    suspend fun getVideoData(url: String): VideoData = withContext(Dispatchers.IO) {
+    suspend fun getVideoData(
+        url: String,
+        onLog: (String) -> Unit = {}
+    ): VideoData = withContext(Dispatchers.IO) {
         runCatching {
-            val info = kotlinx.coroutines.withTimeout(90_000) {
-                YoutubeDL.getInstance().getInfo(url)
+            val request = YoutubeDLRequest(url).apply {
+                addOption("--dump-single-json")
+                addOption("--no-playlist")
+                addOption("--no-warnings")
+                addOption("--no-check-certificates")
             }
-            val title = info.title ?: ""
-            val formats = (info.formats ?: emptyList()).mapNotNull { fmt ->
-                val id  = fmt.formatId ?: return@mapNotNull null
-                val ext = fmt.ext ?: "mp4"
-                val h   = fmt.height ?: 0
-
-                val isVideoOnly = fmt.vcodec?.isNotEmpty() == true && (fmt.acodec == null || fmt.acodec == "none")
-                val isAudioOnly = (fmt.vcodec == null || fmt.vcodec == "none") && fmt.acodec?.isNotEmpty() == true
-
-                val label = when {
-                    isAudioOnly -> "Audio only - ${ext.uppercase()}"
-                    h > 0       -> "${h}p${if (!isVideoOnly) " - $ext" else " (video only) - $ext"}"
-                    else        -> "${fmt.format ?: id} - $ext"
+            val response = kotlinx.coroutines.withTimeout(90_000) {
+                YoutubeDL.getInstance().execute(request, null) { _, _, line ->
+                    if (!line.isNullOrBlank()) onLog(line.trim().take(80))
                 }
-
-                VideoFormat(
-                    formatId = id, label = label, ext = ext,
-                    fileSizeBytes = 0L, height = h, isAudioOnly = isAudioOnly
-                )
             }
-                .distinctBy { it.label }
-                .sortedWith(compareByDescending<VideoFormat> { it.height }.thenBy { it.isAudioOnly })
-            VideoData(title = title, formats = formats)
+            parseVideoJson(response.out)
         }.getOrElse { VideoData(title = "", formats = emptyList(), error = it.message) }
+    }
+
+    private fun parseVideoJson(jsonStr: String): VideoData {
+        val obj = org.json.JSONObject(jsonStr)
+        val title = obj.optString("title", "")
+        val formatsArr = obj.optJSONArray("formats") ?: org.json.JSONArray()
+        val formats = (0 until formatsArr.length()).mapNotNull { i ->
+            val f = formatsArr.optJSONObject(i) ?: return@mapNotNull null
+            val id = f.optString("format_id", "").ifBlank { return@mapNotNull null }
+            val ext = f.optString("ext", "mp4")
+            val h = f.optInt("height", 0)
+            val vcodec = f.optString("vcodec", "none")
+            val acodec = f.optString("acodec", "none")
+            val sizeBytes = f.optLong("filesize", f.optLong("filesize_approx", 0L))
+            val isVideoOnly = vcodec != "none" && acodec == "none"
+            val isAudioOnly = vcodec == "none" && acodec != "none"
+            val label = when {
+                isAudioOnly -> "Audio only - ${ext.uppercase()}"
+                h > 0 -> "${h}p${if (!isVideoOnly) " - $ext" else " (video only) - $ext"}"
+                else -> "${f.optString("format", id)} - $ext"
+            }
+            VideoFormat(id, label, ext, sizeBytes, h, isAudioOnly)
+        }
+            .distinctBy { it.label }
+            .sortedWith(compareByDescending<VideoFormat> { it.height }.thenBy { it.isAudioOnly })
+        return VideoData(title = title, formats = formats)
     }
 
     suspend fun getFormats(url: String): List<VideoFormat> = getVideoData(url).formats

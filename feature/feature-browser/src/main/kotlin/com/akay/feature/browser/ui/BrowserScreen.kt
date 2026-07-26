@@ -357,6 +357,17 @@ fun BrowserScreen(
                                     findTotalMatches = 0
                                 },
                                 onToggleDesktop = { viewModel.setDesktopMode(!desktopMode) },
+                                onScreenshot = {
+                                    val ok = webView?.let { captureAndShare(it, context) } ?: false
+                                    if (!ok) Toast.makeText(context, "Nothing to capture", Toast.LENGTH_SHORT).show()
+                                },
+                                onTranslate = {
+                                    val url = uiState.displayUrl
+                                    if (url.isNotBlank() && url != "about:blank") {
+                                        val enc = java.net.URLEncoder.encode(url, "UTF-8")
+                                        viewModel.navigateToUrl("https://translate.google.com/translate?sl=auto&tl=en&u=$enc")
+                                    }
+                                },
                                 onDevConsole = { viewModel.toggleDevConsole() }
                             )
                         }
@@ -738,6 +749,7 @@ fun BrowserScreen(
             formats   = dlState.qualityFormats,
             isLoading = dlState.isFetchingFormats,
             error     = dlState.formatError,
+            status    = dlState.fetchStatus,
             onSelect  = { fmt -> downloadViewModel.downloadWithFormat(fmt) },
             onBestQuality = { downloadViewModel.downloadBestQuality() },
             onDismiss = { downloadViewModel.dismissQualityPicker() }
@@ -761,6 +773,8 @@ private fun BrowserOverflowMenu(
     onShare: () -> Unit,
     onFindInPage: () -> Unit,
     onToggleDesktop: () -> Unit,
+    onScreenshot: () -> Unit,
+    onTranslate: () -> Unit,
     onDevConsole: () -> Unit
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
@@ -810,6 +824,16 @@ private fun BrowserOverflowMenu(
             text = { Text("Find in page") },
             leadingIcon = { Icon(Icons.Default.Search, null) },
             onClick = { onDismiss(); onFindInPage() }
+        )
+        DropdownMenuItem(
+            text = { Text("Translate page") },
+            leadingIcon = { Icon(Icons.Default.Translate, null) },
+            onClick = { onDismiss(); onTranslate() }
+        )
+        DropdownMenuItem(
+            text = { Text("Screenshot page") },
+            leadingIcon = { Icon(Icons.Default.PhotoCamera, null) },
+            onClick = { onDismiss(); onScreenshot() }
         )
         DropdownMenuItem(
             text = { Text("Desktop site") },
@@ -920,6 +944,33 @@ fun PasteLinkDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
+}
+
+/** Renders the visible WebView to a PNG in cache and opens a share sheet. */
+private fun captureAndShare(webView: WebView, context: Context): Boolean {
+    if (webView.width <= 0 || webView.height <= 0) return false
+    return try {
+        val bitmap = android.graphics.Bitmap.createBitmap(
+            webView.width, webView.height, android.graphics.Bitmap.Config.ARGB_8888
+        )
+        webView.draw(android.graphics.Canvas(bitmap))
+        val dir = java.io.File(context.cacheDir, "screenshots").apply { mkdirs() }
+        val file = java.io.File(dir, "shot_${System.currentTimeMillis()}.png")
+        file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+        bitmap.recycle()
+        val uri = androidx.core.content.FileProvider.getUriForFile(
+            context, "${context.packageName}.fileprovider", file
+        )
+        val share = Intent(Intent.ACTION_SEND).apply {
+            type = "image/png"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(share, "Share screenshot"))
+        true
+    } catch (_: Exception) {
+        false
+    }
 }
 
 private fun prettifyUrl(url: String): String =
