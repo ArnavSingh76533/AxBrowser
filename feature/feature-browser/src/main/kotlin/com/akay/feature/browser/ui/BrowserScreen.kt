@@ -50,6 +50,8 @@ import com.akay.core.ui.theme.Primary
 import com.akay.feature.browser.adblock.AdBlockEngine
 import com.akay.feature.browser.devconsole.DevConsolePanel
 import com.akay.feature.browser.devconsole.NetworkInterceptor
+import com.akay.feature.browser.reader.ReaderMode
+import com.akay.feature.browser.gesture.edgeSwipeNavigation
 import com.akay.feature.browser.viewmodel.BrowserViewModel
 import com.akay.feature.browser.webview.AxNetBridge
 import com.akay.feature.browser.webview.AxWebChromeClient
@@ -101,6 +103,11 @@ fun BrowserScreen(
     var findQuery by remember { mutableStateOf("") }
     var findActiveMatch by remember { mutableIntStateOf(0) }
     var findTotalMatches by remember { mutableIntStateOf(0) }
+
+    // Reader mode state
+    var readerModeActive by remember { mutableStateOf(false) }
+    var readerModeLoading by remember { mutableStateOf(false) }
+    var preReaderUrl by remember { mutableStateOf<String?>(null) }
 
     val networkMedia by NetworkInterceptor.detectedMedia.collectAsState()
     val blockedCount by AdBlockEngine.blockedCount.collectAsState()
@@ -356,6 +363,34 @@ fun BrowserScreen(
                                     findActiveMatch = 0
                                     findTotalMatches = 0
                                 },
+                                readerModeActive = readerModeActive,
+                                onToggleReaderMode = {
+                                    val wv = webView
+                                    if (wv == null) {
+                                        // no-op
+                                    } else if (readerModeActive) {
+                                        readerModeActive = false
+                                        preReaderUrl?.let { wv.loadUrl(it) }
+                                    } else {
+                                        readerModeLoading = true
+                                        wv.evaluateJavascript(ReaderMode.EXTRACTION_JS) { result ->
+                                            readerModeLoading = false
+                                            val article = ReaderMode.parse(result)
+                                            if (article == null) {
+                                                Toast.makeText(context, "Couldn't extract article text", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                preReaderUrl = uiState.displayUrl
+                                                readerModeActive = true
+                                                val html = ReaderMode.buildReaderHtml(
+                                                    article,
+                                                    fontSizePercent = fontSize,
+                                                    darkMode = true
+                                                )
+                                                wv.loadDataWithBaseURL(uiState.displayUrl, html, "text/html", "UTF-8", null)
+                                            }
+                                        }
+                                    }
+                                },
                                 onToggleDesktop = { viewModel.setDesktopMode(!desktopMode) },
                                 onScreenshot = {
                                     val ok = webView?.let { captureAndShare(it, context) } ?: false
@@ -578,7 +613,15 @@ fun BrowserScreen(
                             else wv.loadUrl(uiState.url, customHeadersState.value)
                         }
                     },
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .edgeSwipeNavigation(
+                            enabled = !readerModeActive,
+                            canGoBack = uiState.canGoBack,
+                            canGoForward = uiState.canGoForward,
+                            onSwipeBack = { webView?.goBack() },
+                            onSwipeForward = { webView?.goForward() }
+                        )
                 )
             }
 
@@ -772,6 +815,8 @@ private fun BrowserOverflowMenu(
     onAddBookmark: () -> Unit,
     onShare: () -> Unit,
     onFindInPage: () -> Unit,
+    readerModeActive: Boolean,
+    onToggleReaderMode: () -> Unit,
     onToggleDesktop: () -> Unit,
     onScreenshot: () -> Unit,
     onTranslate: () -> Unit,
@@ -824,6 +869,11 @@ private fun BrowserOverflowMenu(
             text = { Text("Find in page") },
             leadingIcon = { Icon(Icons.Default.Search, null) },
             onClick = { onDismiss(); onFindInPage() }
+        )
+        DropdownMenuItem(
+            text = { Text(if (readerModeActive) "Exit reader mode" else "Reader mode") },
+            leadingIcon = { Icon(Icons.Default.Article, null, tint = if (readerModeActive) Primary else LocalContentColor.current) },
+            onClick = { onDismiss(); onToggleReaderMode() }
         )
         DropdownMenuItem(
             text = { Text("Translate page") },
