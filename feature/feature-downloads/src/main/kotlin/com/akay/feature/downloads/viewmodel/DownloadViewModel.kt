@@ -64,7 +64,8 @@ data class DownloadManagerState(
     val qualityPickerTitle: String = "",
     val qualityFormats: List<com.akay.feature.downloads.engine.VideoFormat> = emptyList(),
     val isFetchingFormats: Boolean = false,
-    val formatError: String? = null
+    val formatError: String? = null,
+    val fetchStatus: String = ""
 ) {
     val active get() = downloads.filter { it.status == ItemStatus.RUNNING || it.status == ItemStatus.QUEUED }
     val completed get() = downloads.filter { it.status == ItemStatus.COMPLETED }
@@ -283,14 +284,32 @@ class DownloadViewModel @Inject constructor(
         }
     }
 
+    // Session cache so re-opening the picker for the same URL is instant.
+    private val formatCache = mutableMapOf<String, com.akay.feature.downloads.engine.VideoData>()
+
     fun enqueueWithQualityPicker(url: String) {
         if (url.isBlank()) return
+        formatCache[url]?.let { cached ->
+            if (cached.formats.isNotEmpty()) {
+                _state.update {
+                    it.copy(isFetchingFormats = false, qualityPickerUrl = url,
+                        qualityFormats = cached.formats, qualityPickerTitle = cached.title, formatError = null)
+                }
+                return
+            }
+        }
         _state.update {
-            it.copy(isFetchingFormats = true, qualityPickerUrl = url, qualityPickerTitle = "", formatError = null)
+            it.copy(isFetchingFormats = true, qualityPickerUrl = url, qualityPickerTitle = "",
+                formatError = null, qualityFormats = emptyList(), fetchStatus = "Starting…")
         }
         viewModelScope.launch {
-            // Single yt-dlp call on the IO dispatcher (see YtDlpEngine.getVideoData).
-            val data = runCatching { ytDlpEngine.getVideoData(url) }.getOrNull()
+            // Single streaming yt-dlp call on IO; log lines surface as fetchStatus.
+            val data = runCatching {
+                ytDlpEngine.getVideoData(url) { line ->
+                    _state.update { it.copy(fetchStatus = line) }
+                }
+            }.getOrNull()
+            if (data != null && data.formats.isNotEmpty()) formatCache[url] = data
             when {
                 data != null && data.formats.isNotEmpty() -> {
                     _state.update {
@@ -331,7 +350,7 @@ class DownloadViewModel @Inject constructor(
     }
 
     fun dismissQualityPicker() {
-        _state.update { it.copy(qualityFormats = emptyList(), isFetchingFormats = false, formatError = null) }
+        _state.update { it.copy(qualityFormats = emptyList(), isFetchingFormats = false, formatError = null, fetchStatus = "") }
     }
 
     fun downloadBestQuality() {

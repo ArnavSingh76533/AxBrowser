@@ -25,8 +25,15 @@ data class PlayerUiState(
     val duration: Long = 0,
     val isLoading: Boolean = false,
     val error: String? = null,
-    val playbackSpeed: Float = 1.0f
+    val playbackSpeed: Float = 1.0f,
+    val isAudio: Boolean = false,
+    val isMuted: Boolean = false,
+    val isEnded: Boolean = false,
+    /** 0 = fit, 1 = fill, 2 = zoom (crop). */
+    val resizeMode: Int = 0
 )
+
+private val AUDIO_EXTS = setOf("mp3", "m4a", "aac", "ogg", "opus", "flac", "wav", "wma")
 
 @HiltViewModel
 class PlayerViewModel @Inject constructor(
@@ -53,6 +60,7 @@ class PlayerViewModel @Inject constructor(
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     _uiState.value = _uiState.value.copy(
                         isLoading = playbackState == Player.STATE_BUFFERING,
+                        isEnded = playbackState == Player.STATE_ENDED,
                         duration = this@apply.duration.coerceAtLeast(0)
                     )
                 }
@@ -87,7 +95,12 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun loadVideo(path: String, title: String = "") {
-        _uiState.value = _uiState.value.copy(videoUrl = path, title = title, isLoading = true, error = null)
+        val ext = path.substringAfterLast('.', "").substringBefore('?').lowercase()
+        val isAudio = ext in AUDIO_EXTS
+        _uiState.value = _uiState.value.copy(
+            videoUrl = path, title = title, isLoading = true, error = null,
+            isAudio = isAudio, isEnded = false
+        )
         exoPlayer?.let { player ->
             val uri = when {
                 path.startsWith("http://") || path.startsWith("https://") -> Uri.parse(path)
@@ -120,6 +133,21 @@ class PlayerViewModel @Inject constructor(
     fun setSpeed(speed: Float) {
         exoPlayer?.setPlaybackSpeed(speed)
         _uiState.value = _uiState.value.copy(playbackSpeed = speed)
+    }
+
+    fun toggleMute() {
+        val muted = !_uiState.value.isMuted
+        exoPlayer?.volume = if (muted) 0f else 1f
+        _uiState.value = _uiState.value.copy(isMuted = muted)
+    }
+
+    fun cycleResizeMode() {
+        _uiState.value = _uiState.value.copy(resizeMode = (_uiState.value.resizeMode + 1) % 3)
+    }
+
+    fun replay() {
+        exoPlayer?.let { it.seekTo(0); it.play() }
+        _uiState.value = _uiState.value.copy(isEnded = false)
     }
 
     fun release() {

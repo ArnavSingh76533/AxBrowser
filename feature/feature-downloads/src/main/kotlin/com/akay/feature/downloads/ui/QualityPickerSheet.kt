@@ -14,6 +14,11 @@ import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VideoFile
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -31,6 +36,7 @@ fun QualityPickerSheet(
     onSelect: (VideoFormat) -> Unit,
     onDismiss: () -> Unit,
     error: String? = null,
+    status: String = "",
     onBestQuality: () -> Unit = {}
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -56,7 +62,7 @@ fun QualityPickerSheet(
             HorizontalDivider()
 
             when {
-                isLoading -> LoadingState()
+                isLoading -> LoadingState(status = status)
                 error != null -> ErrorState(error = error, onBestQuality = onBestQuality, onDismiss = onDismiss)
                 else -> {
                     val video = formats.filter { !it.isAudioOnly }
@@ -82,13 +88,25 @@ fun QualityPickerSheet(
 }
 
 @Composable
-private fun LoadingState() {
-    Box(modifier = Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
+private fun LoadingState(status: String) {
+    // Elapsed-seconds counter so the user always sees forward motion.
+    var elapsed by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) { kotlinx.coroutines.delay(1000); elapsed++ }
+    }
+    Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             CircularProgressIndicator(color = Primary)
-            Spacer(Modifier.height(12.dp))
-            Text("Fetching available qualities…", style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(0.6f))
+            Spacer(Modifier.height(16.dp))
+            Text("Analyzing link…  ${elapsed}s", style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                status.ifBlank { "Contacting site and extracting available formats" },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(0.6f),
+                maxLines = 2
+            )
         }
     }
 }

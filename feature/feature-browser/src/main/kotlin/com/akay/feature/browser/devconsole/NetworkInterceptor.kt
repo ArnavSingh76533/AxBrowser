@@ -66,8 +66,8 @@ object NetworkInterceptor {
     private val _detectedMedia = MutableStateFlow<List<DetectedMedia>>(emptyList())
     val detectedMedia: StateFlow<List<DetectedMedia>> = _detectedMedia.asStateFlow()
 
-    private val _blockRules = MutableStateFlow<List<String>>(emptyList())
-    val blockRules: StateFlow<List<String>> = _blockRules.asStateFlow()
+    private val _rules = MutableStateFlow<List<InterceptorRule>>(emptyList())
+    val rules: StateFlow<List<InterceptorRule>> = _rules.asStateFlow()
 
     private const val MAX_ENTRIES = 500
     private val seenMediaUrls = mutableSetOf<String>()
@@ -162,27 +162,48 @@ object NetworkInterceptor {
         }
     }
 
-    // --- Interceptor: user-defined runtime block rules ---
+    // --- Interceptor: user-defined runtime rules (block / redirect / header) ---
 
-    fun addBlockRule(pattern: String) {
-        val p = pattern.trim()
-        if (p.isEmpty()) return
-        _blockRules.update { if (it.contains(p)) it else it + p }
+    fun addRule(rule: InterceptorRule) {
+        if (rule.pattern.isBlank()) return
+        _rules.update { it + rule }
     }
 
-    fun removeBlockRule(pattern: String) {
-        _blockRules.update { it.filterNot { r -> r == pattern } }
+    fun removeRule(id: String) {
+        _rules.update { it.filterNot { r -> r.id == id } }
     }
 
-    /** True if the URL matches any user block rule (substring match). */
-    fun isUserBlocked(url: String): Boolean {
-        val rules = _blockRules.value
-        if (rules.isEmpty()) return false
+    fun toggleRule(id: String) {
+        _rules.update { it.map { r -> if (r.id == id) r.copy(enabled = !r.enabled) else r } }
+    }
+
+    /** First enabled rule whose pattern matches the URL, or null. */
+    fun matchRule(url: String): InterceptorRule? {
+        val list = _rules.value
+        if (list.isEmpty()) return null
         val lower = url.lowercase()
-        return rules.any { lower.contains(it.lowercase()) }
+        return list.firstOrNull { it.enabled && lower.contains(it.pattern.lowercase()) }
     }
 
-    /** Suggests a concise block pattern (host) for a URL. */
+    /** Suggests a concise pattern (host) for a URL. */
     fun suggestRule(url: String): String =
         runCatching { java.net.URI(url).host ?: url }.getOrDefault(url)
+}
+
+enum class RuleAction { BLOCK, REDIRECT, ADD_HEADER }
+
+data class InterceptorRule(
+    val id: String = UUID.randomUUID().toString(),
+    val pattern: String,
+    val action: RuleAction,
+    /** For REDIRECT: target URL. For ADD_HEADER: "Name: Value". Unused for BLOCK. */
+    val value: String = "",
+    val enabled: Boolean = true
+) {
+    val summary: String
+        get() = when (action) {
+            RuleAction.BLOCK -> "Block"
+            RuleAction.REDIRECT -> "Redirect → $value"
+            RuleAction.ADD_HEADER -> "Header $value"
+        }
 }

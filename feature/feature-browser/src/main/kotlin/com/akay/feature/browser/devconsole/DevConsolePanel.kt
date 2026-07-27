@@ -47,10 +47,10 @@ fun DevConsolePanel(
     onDismiss: () -> Unit
 ) {
     val requests by NetworkInterceptor.requests.collectAsState()
-    val blockRules by NetworkInterceptor.blockRules.collectAsState()
+    val rules by NetworkInterceptor.rules.collectAsState()
     var selectedTab by remember { mutableIntStateOf(0) }
     var selectedRequest by remember { mutableStateOf<NetworkRequest?>(null) }
-    val tabs = listOf("Network (${requests.size})", "Rules (${blockRules.size})", "Elements", "Info")
+    val tabs = listOf("Network (${requests.size})", "Interceptor (${rules.size})", "Elements", "Info")
 
     if (isVisible) {
         ModalBottomSheet(
@@ -89,9 +89,9 @@ fun DevConsolePanel(
 
                 when (selectedTab) {
                     0 -> NetworkTab(requests = requests, onSelectRequest = { selectedRequest = it })
-                    1 -> RulesTab(rules = blockRules)
+                    1 -> RulesTab(rules = rules)
                     2 -> ElementsTab(html = currentPageHtml)
-                    3 -> InfoTab(url = currentPageUrl, requestCount = requests.size, ruleCount = blockRules.size)
+                    3 -> InfoTab(url = currentPageUrl, requestCount = requests.size, ruleCount = rules.size)
                 }
             }
 
@@ -249,8 +249,9 @@ fun RequestDetailSheet(request: NetworkRequest, onDismiss: () -> Unit) {
                 )
                 AssistChip(
                     onClick = {
-                        NetworkInterceptor.addBlockRule(NetworkInterceptor.suggestRule(request.url))
-                        Toast.makeText(context, "Blocking ${NetworkInterceptor.suggestRule(request.url)}", Toast.LENGTH_SHORT).show()
+                        val host = NetworkInterceptor.suggestRule(request.url)
+                        NetworkInterceptor.addRule(InterceptorRule(pattern = host, action = RuleAction.BLOCK))
+                        Toast.makeText(context, "Blocking $host", Toast.LENGTH_SHORT).show()
                     },
                     label = { Text("Block", fontSize = 12.sp) },
                     leadingIcon = { Icon(Icons.Default.Block, null, modifier = Modifier.size(16.dp)) }
@@ -316,45 +317,93 @@ fun HeaderRow(name: String, value: String) {
 }
 
 @Composable
-fun RulesTab(rules: List<String>) {
-    var newRule by remember { mutableStateOf("") }
+fun RulesTab(rules: List<InterceptorRule>) {
+    var pattern by remember { mutableStateOf("") }
+    var action by remember { mutableStateOf(RuleAction.BLOCK) }
+    var value by remember { mutableStateOf("") }
+
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Text(
-            "Requests whose URL contains any rule are blocked (acts as a request interceptor).",
+            "Intercept requests whose URL contains a pattern: block them, redirect to " +
+                "another URL, or inject a header. Applied live to every request.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(Modifier.height(12.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
+
+        OutlinedTextField(
+            value = pattern,
+            onValueChange = { pattern = it },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            label = { Text("URL contains…") },
+            placeholder = { Text("e.g. ads.example.com or /track") },
+            textStyle = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            RuleAction.entries.forEach { a ->
+                FilterChip(
+                    selected = action == a,
+                    onClick = { action = a },
+                    label = {
+                        Text(when (a) {
+                            RuleAction.BLOCK -> "Block"; RuleAction.REDIRECT -> "Redirect"; RuleAction.ADD_HEADER -> "Add header"
+                        }, fontSize = 11.sp)
+                    }
+                )
+            }
+        }
+        if (action != RuleAction.BLOCK) {
+            Spacer(Modifier.height(8.dp))
             OutlinedTextField(
-                value = newRule,
-                onValueChange = { newRule = it },
-                modifier = Modifier.weight(1f),
+                value = value,
+                onValueChange = { value = it },
+                modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
-                placeholder = { Text("host or substring, e.g. ads.example.com") },
+                label = { Text(if (action == RuleAction.REDIRECT) "Redirect to URL" else "Header (Name: Value)") },
                 textStyle = MaterialTheme.typography.bodySmall
             )
-            Spacer(Modifier.width(8.dp))
-            Button(onClick = {
-                NetworkInterceptor.addBlockRule(newRule)
-                newRule = ""
-            }, enabled = newRule.isNotBlank()) { Text("Add") }
         }
+        Spacer(Modifier.height(8.dp))
+        Button(
+            onClick = {
+                NetworkInterceptor.addRule(InterceptorRule(pattern = pattern.trim(), action = action, value = value.trim()))
+                pattern = ""; value = ""
+            },
+            enabled = pattern.isNotBlank() && (action == RuleAction.BLOCK || value.isNotBlank()),
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("Add rule") }
+
         Spacer(Modifier.height(12.dp))
+        HorizontalDivider()
         if (rules.isEmpty()) {
-            Text("No block rules yet.", style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("No interceptor rules yet.", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         } else {
             LazyColumn {
-                items(rules, key = { it }) { rule ->
+                items(rules, key = { it.id }) { rule ->
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.Block, null, tint = Color(0xFFFF5252), modifier = Modifier.size(18.dp))
+                        val tint = when (rule.action) {
+                            RuleAction.BLOCK -> Color(0xFFFF5252)
+                            RuleAction.REDIRECT -> Color(0xFF4C8DFF)
+                            RuleAction.ADD_HEADER -> Color(0xFF2DD4A7)
+                        }
+                        Icon(Icons.Default.Block, null, tint = tint, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(10.dp))
-                        Text(rule, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                        IconButton(onClick = { NetworkInterceptor.removeBlockRule(rule) }) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(rule.pattern, fontFamily = FontFamily.Monospace, fontSize = 12.sp,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(rule.summary, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        Switch(checked = rule.enabled, onCheckedChange = { NetworkInterceptor.toggleRule(rule.id) })
+                        IconButton(onClick = { NetworkInterceptor.removeRule(rule.id) }) {
                             Icon(Icons.Default.Close, "Remove", modifier = Modifier.size(18.dp))
                         }
                     }
