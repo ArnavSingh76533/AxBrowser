@@ -9,10 +9,23 @@ import com.akay.core.domain.model.Tab
 import com.akay.core.domain.repository.BookmarkRepository
 import com.akay.core.domain.repository.HistoryRepository
 import com.akay.core.domain.repository.TabRepository
+import com.akay.feature.browser.suggest.SearchSuggestion
+import com.akay.feature.browser.suggest.SearchSuggestionProvider
+import com.akay.feature.browser.suggest.SuggestionType
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.net.URLEncoder
 import java.util.UUID
@@ -43,12 +56,14 @@ sealed class BrowserUiEvent {
     data class NavigateToUrl(val url: String) : BrowserUiEvent()
 }
 
+@OptIn(FlowPreview::class)
 @HiltViewModel
 class BrowserViewModel @Inject constructor(
     private val tabRepository: TabRepository,
     private val historyRepository: HistoryRepository,
     private val bookmarkRepository: BookmarkRepository,
-    private val preferences: AxPreferences
+    private val preferences: AxPreferences,
+    private val suggestionProvider: SearchSuggestionProvider
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(BrowserUiState())
@@ -68,6 +83,50 @@ class BrowserViewModel @Inject constructor(
     val darkModeForWebsites = preferences.darkModeForWebsites
 
     private var searchEngineUrl: String = "https://www.google.com/search?q="
+
+    private val addressQuery = MutableStateFlow("")
+
+    val suggestions: StateFlow<List<SearchSuggestion>> = addressQuery
+        .debounce(180)
+        .distinctUntilChanged()
+        .flatMapLatest { query ->
+            if (query.isBlank() || looksLikeUrl(query)) {
+                flowOf(emptyList())
+            } else {
+                combine(
+                    bookmarkRepository.searchBookmarks(query),
+                    historyRepository.searchHistory(query)
+                ) { bookmarks, history ->
+                    val local = buildList {
+                        bookmarks.take(3).forEach {
+                            add(SearchSuggestion(text = it.title.ifBlank { it.url }, subtitle = it.url, url = it.url, type = SuggestionType.BOOKMARK))
+                        }
+                        history.take(3).forEach {
+                            add(SearchSuggestion(text = it.title.ifBlank { it.url }, subtitle = it.url, url = it.url, type = SuggestionType.HISTORY))
+                        }
+                    }
+                    local
+                }.flatMapLatest { local ->
+                    flow {
+                        emit(local)
+                        val remote = suggestionProvider.fetchRemoteSuggestions(query)
+                        emit(local + remote.filter { r -> local.none { it.text.equals(r.text, ignoreCase = true) } })
+                    }
+                }
+            }
+        }
+        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private fun looksLikeUrl(text: String): Boolean {
+        val t = text.trim()
+        return t.startsWith("http://") || t.startsWith("https://") || t.startsWith("about:") ||
+            (t.contains(".") && !t.contains(" ") && !t.startsWith("."))
+    }
+
+    fun onAddressQueryChanged(query: String) {
+        updateUrl(query)
+        addressQuery.value = query
+    }
 
     init {
         loadTabs()

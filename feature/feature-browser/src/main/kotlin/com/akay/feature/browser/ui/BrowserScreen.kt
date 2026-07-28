@@ -18,6 +18,7 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -111,6 +112,7 @@ fun BrowserScreen(
 
     val networkMedia by NetworkInterceptor.detectedMedia.collectAsState()
     val blockedCount by AdBlockEngine.blockedCount.collectAsState()
+    val suggestions by viewModel.suggestions.collectAsState()
 
     // Preferences
     val erudaEnabled by viewModel.erudaEnabled.collectAsState(initial = false)
@@ -216,7 +218,7 @@ fun BrowserScreen(
                             if (isEditingUrl) {
                                 OutlinedTextField(
                                     value = uiState.displayUrl,
-                                    onValueChange = { viewModel.updateUrl(it) },
+                                    onValueChange = { viewModel.onAddressQueryChanged(it) },
                                     modifier = Modifier.fillMaxWidth(),
                                     singleLine = true,
                                     placeholder = {
@@ -405,6 +407,58 @@ fun BrowserScreen(
                                 },
                                 onDevConsole = { viewModel.toggleDevConsole() }
                             )
+                        }
+                    }
+
+                    AnimatedVisibility(visible = isEditingUrl && suggestions.isNotEmpty()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.surface)
+                        ) {
+                            suggestions.take(6).forEach { suggestion ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            val target = suggestion.url ?: suggestion.text
+                                            isEditingUrl = false
+                                            keyboardController?.hide()
+                                            viewModel.navigateToUrl(target)
+                                        }
+                                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = when (suggestion.type) {
+                                            com.akay.feature.browser.suggest.SuggestionType.BOOKMARK -> Icons.Default.Star
+                                            com.akay.feature.browser.suggest.SuggestionType.HISTORY -> Icons.Default.History
+                                            com.akay.feature.browser.suggest.SuggestionType.REMOTE -> Icons.Default.Search
+                                        },
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            suggestion.text,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (!suggestion.subtitle.isNullOrBlank()) {
+                                            Text(
+                                                suggestion.subtitle,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
 
