@@ -77,7 +77,7 @@ class AxWebViewClient(
             }
         }
 
-        if (adBlockerEnabled() && (AdBlockEngine.shouldBlock(url) || isBlocked(url))) {
+        if (adBlockerEnabled() && (AdBlockEngine.shouldBlock(url, view?.url) || isBlocked(url))) {
             AdBlockEngine.onBlocked()
             NetworkInterceptor.markBlocked(url)
             return WebResourceResponse("text/plain", "UTF-8", ByteArrayInputStream("".toByteArray()))

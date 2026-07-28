@@ -405,7 +405,9 @@ fun BrowserScreen(
                                         viewModel.navigateToUrl("https://translate.google.com/translate?sl=auto&tl=en&u=$enc")
                                     }
                                 },
-                                onDevConsole = { viewModel.toggleDevConsole() }
+                                onDevConsole = { viewModel.toggleDevConsole() },
+                                siteAdBlockAllowlisted = viewModel.isAdBlockAllowlistedForCurrentSite(),
+                                onToggleSiteAdBlock = { viewModel.toggleAdBlockForCurrentSite() }
                             )
                         }
                     }
@@ -874,10 +876,23 @@ private fun BrowserOverflowMenu(
     onToggleDesktop: () -> Unit,
     onScreenshot: () -> Unit,
     onTranslate: () -> Unit,
-    onDevConsole: () -> Unit
+    onDevConsole: () -> Unit,
+    siteAdBlockAllowlisted: Boolean,
+    onToggleSiteAdBlock: () -> Unit
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
         if (adBlockOn) {
+            DropdownMenuItem(
+                text = { Text(if (siteAdBlockAllowlisted) "Ad-block disabled on this site" else "Ad-block enabled on this site") },
+                leadingIcon = {
+                    Icon(
+                        Icons.Default.Shield,
+                        null,
+                        tint = if (siteAdBlockAllowlisted) MaterialTheme.colorScheme.onSurfaceVariant else Primary
+                    )
+                },
+                onClick = { onDismiss(); onToggleSiteAdBlock() }
+            )
             DropdownMenuItem(
                 text = {
                     Text(

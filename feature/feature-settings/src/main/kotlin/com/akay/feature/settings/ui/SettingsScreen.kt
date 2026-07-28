@@ -69,6 +69,7 @@ import com.akay.feature.settings.viewmodel.SettingsViewModel
 fun SettingsScreen(
     onBack: () -> Unit,
     onOpenExtensions: () -> Unit = {},
+    onOpenFilterLists: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -213,6 +214,11 @@ fun SettingsScreen(
                     subtitle = "Block ads and trackers, like Brave shields",
                     checked = uiState.isAdBlockerEnabled,
                     onCheckedChange = { viewModel.setAdBlockerEnabled(it) }
+                )
+                SettingsNavigationItem(
+                    title = "Filter lists",
+                    subtitle = "Subscribe to community ad/tracker block lists",
+                    onClick = onOpenFilterLists
                 )
                 SettingsSwitchItem(
                     title = "HTTPS Upgrade",

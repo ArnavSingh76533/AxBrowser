@@ -3,9 +3,12 @@ package com.akay.feature.browser.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.akay.core.data.datastore.AxPreferences
+import com.akay.feature.browser.adblock.AdBlockEngine
 import com.akay.core.domain.model.Bookmark
 import com.akay.core.domain.model.HistoryItem
+import com.akay.core.domain.model.SitePermissionType
 import com.akay.core.domain.model.Tab
+import com.akay.core.domain.repository.AdBlockRepository
 import com.akay.core.domain.repository.BookmarkRepository
 import com.akay.core.domain.repository.HistoryRepository
 import com.akay.core.domain.repository.TabRepository
@@ -63,7 +66,8 @@ class BrowserViewModel @Inject constructor(
     private val historyRepository: HistoryRepository,
     private val bookmarkRepository: BookmarkRepository,
     private val preferences: AxPreferences,
-    private val suggestionProvider: SearchSuggestionProvider
+    private val suggestionProvider: SearchSuggestionProvider,
+    private val adBlockRepository: AdBlockRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(BrowserUiState())
@@ -132,6 +136,29 @@ class BrowserViewModel @Inject constructor(
         loadTabs()
         viewModelScope.launch {
             preferences.searchEngine.collect { searchEngineUrl = it }
+        }
+        viewModelScope.launch {
+            adBlockRepository.observeAllBlockedHosts().collect { hosts ->
+                AdBlockEngine.setCustomHosts(hosts.toHashSet())
+            }
+        }
+        viewModelScope.launch {
+            adBlockRepository.observeDisabledOrigins(SitePermissionType.AD_BLOCK).collect { origins ->
+                AdBlockEngine.setAllowlistedOrigins(origins.toHashSet())
+            }
+        }
+    }
+
+    private fun currentOrigin(): String? =
+        runCatching { java.net.URI(_uiState.value.displayUrl).let { "${it.scheme}://${it.host}" } }.getOrNull()
+
+    fun isAdBlockAllowlistedForCurrentSite(): Boolean = AdBlockEngine.isOriginAllowlisted(currentOrigin())
+
+    fun toggleAdBlockForCurrentSite() {
+        val origin = currentOrigin() ?: return
+        viewModelScope.launch {
+            val enabled = adBlockRepository.isEnabledForOrigin(origin, SitePermissionType.AD_BLOCK)
+            adBlockRepository.setEnabledForOrigin(origin, SitePermissionType.AD_BLOCK, !enabled)
         }
     }
 
