@@ -70,6 +70,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onOpenExtensions: () -> Unit = {},
     onOpenFilterLists: () -> Unit = {},
+    onOpenPasswords: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -219,6 +220,11 @@ fun SettingsScreen(
                     title = "Filter lists",
                     subtitle = "Subscribe to community ad/tracker block lists",
                     onClick = onOpenFilterLists
+                )
+                SettingsNavigationItem(
+                    title = "Saved passwords",
+                    subtitle = "Manage logins AxBrowser has saved for you",
+                    onClick = onOpenPasswords
                 )
                 SettingsSwitchItem(
                     title = "HTTPS Upgrade",

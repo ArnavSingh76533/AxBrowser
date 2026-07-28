@@ -6,11 +6,13 @@ import com.akay.core.data.datastore.AxPreferences
 import com.akay.feature.browser.adblock.AdBlockEngine
 import com.akay.core.domain.model.Bookmark
 import com.akay.core.domain.model.HistoryItem
+import com.akay.core.domain.model.SavedCredential
 import com.akay.core.domain.model.SitePermissionType
 import com.akay.core.domain.model.Tab
 import com.akay.core.domain.repository.AdBlockRepository
 import com.akay.core.domain.repository.BookmarkRepository
 import com.akay.core.domain.repository.HistoryRepository
+import com.akay.core.domain.repository.PasswordRepository
 import com.akay.core.domain.repository.TabRepository
 import com.akay.feature.browser.suggest.SearchSuggestion
 import com.akay.feature.browser.suggest.SearchSuggestionProvider
@@ -67,7 +69,8 @@ class BrowserViewModel @Inject constructor(
     private val bookmarkRepository: BookmarkRepository,
     private val preferences: AxPreferences,
     private val suggestionProvider: SearchSuggestionProvider,
-    private val adBlockRepository: AdBlockRepository
+    private val adBlockRepository: AdBlockRepository,
+    private val passwordRepository: PasswordRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(BrowserUiState())
@@ -160,6 +163,53 @@ class BrowserViewModel @Inject constructor(
             val enabled = adBlockRepository.isEnabledForOrigin(origin, SitePermissionType.AD_BLOCK)
             adBlockRepository.setEnabledForOrigin(origin, SitePermissionType.AD_BLOCK, !enabled)
         }
+    }
+
+    // ---- Password manager ----
+
+    data class PendingCredentialSave(val origin: String, val username: String, val password: String)
+
+    private val _pendingCredentialSave = MutableStateFlow<PendingCredentialSave?>(null)
+    val pendingCredentialSave: StateFlow<PendingCredentialSave?> = _pendingCredentialSave.asStateFlow()
+
+    private val _fillableCredential = MutableStateFlow<SavedCredential?>(null)
+    val fillableCredential: StateFlow<SavedCredential?> = _fillableCredential.asStateFlow()
+
+    /** Called by the JS bridge when a login form with a non-empty password is submitted. */
+    fun onCredentialCaptured(origin: String, username: String, password: String) {
+        viewModelScope.launch {
+            val existing = passwordRepository.getForOrigin(origin).firstOrNull { it.username == username }
+            if (existing?.password == password) return@launch // already saved, nothing to prompt
+            _pendingCredentialSave.value = PendingCredentialSave(origin, username, password)
+        }
+    }
+
+    fun confirmSaveCredential() {
+        val pending = _pendingCredentialSave.value ?: return
+        viewModelScope.launch {
+            passwordRepository.save(pending.origin, pending.username, pending.password)
+            _pendingCredentialSave.value = null
+        }
+    }
+
+    fun dismissSaveCredential() {
+        _pendingCredentialSave.value = null
+    }
+
+    /** Called on every page load to check whether we have a saved login to offer to autofill. */
+    fun onPageOriginLoaded(url: String) {
+        val origin = runCatching { java.net.URI(url).let { "${it.scheme}://${it.host}" } }.getOrNull()
+        if (origin == null) {
+            _fillableCredential.value = null
+            return
+        }
+        viewModelScope.launch {
+            _fillableCredential.value = passwordRepository.getForOrigin(origin).firstOrNull()
+        }
+    }
+
+    fun clearFillableCredential() {
+        _fillableCredential.value = null
     }
 
     fun setDesktopMode(enabled: Boolean) {

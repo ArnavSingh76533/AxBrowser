@@ -8,6 +8,7 @@ import com.akay.core.data.db.dao.BookmarkDao
 import com.akay.core.data.db.dao.DownloadDao
 import com.akay.core.data.db.dao.FilterListDao
 import com.akay.core.data.db.dao.HistoryDao
+import com.akay.core.data.db.dao.PasswordDao
 import com.akay.core.data.db.dao.PermissionDao
 import com.akay.core.data.db.dao.TabDao
 import dagger.Module
@@ -50,6 +51,9 @@ object DataModule {
 
     @Provides
     fun providePermissionDao(database: AxDatabase): PermissionDao = database.permissionDao()
+
+    @Provides
+    fun providePasswordDao(database: AxDatabase): PasswordDao = database.passwordDao()
 
     @Provides
     @Singleton

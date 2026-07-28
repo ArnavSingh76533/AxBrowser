@@ -23,6 +23,7 @@ import com.akay.feature.downloads.viewmodel.DownloadViewModel
 import com.akay.feature.filemanager.ui.FileManagerScreen
 import com.akay.feature.history.ui.HistoryScreen
 import com.akay.feature.settings.ui.FilterListsScreen
+import com.akay.feature.settings.ui.PasswordManagerScreen
 import com.akay.feature.settings.ui.SettingsScreen
 import com.akay.feature.settings.ui.UserScriptsScreen
 import com.akay.feature.videoplayer.PendingMediaPlay
@@ -137,7 +138,8 @@ fun BrowserNavHost() {
                 SettingsScreen(
                     onBack = { navController.popBackStack() },
                     onOpenExtensions = { navController.navigate("userscripts") },
-                    onOpenFilterLists = { navController.navigate("filterlists") }
+                    onOpenFilterLists = { navController.navigate("filterlists") },
+                    onOpenPasswords = { navController.navigate("passwords") }
                 )
             }
             composable("userscripts") {
@@ -145,6 +147,9 @@ fun BrowserNavHost() {
             }
             composable("filterlists") {
                 FilterListsScreen(onBack = { navController.popBackStack() })
+            }
+            composable("passwords") {
+                PasswordManagerScreen(onBack = { navController.popBackStack() })
             }
             composable("videoplayer") {
                 VideoPlayerScreen(onBack = { navController.popBackStack() })

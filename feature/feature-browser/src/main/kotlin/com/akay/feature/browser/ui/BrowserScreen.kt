@@ -55,6 +55,7 @@ import com.akay.feature.browser.reader.ReaderMode
 import com.akay.feature.browser.gesture.edgeSwipeNavigation
 import com.akay.feature.browser.viewmodel.BrowserViewModel
 import com.akay.feature.browser.webview.AxNetBridge
+import com.akay.feature.browser.webview.PasswordCaptureBridge
 import com.akay.feature.browser.webview.AxWebChromeClient
 import com.akay.feature.browser.webview.AxWebViewClient
 import com.akay.feature.browser.webview.HttpHeaderUtil
@@ -537,6 +538,12 @@ fun BrowserScreen(
                             setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
 
                             addJavascriptInterface(AxNetBridge(), "AxNet")
+                            addJavascriptInterface(
+                                PasswordCaptureBridge { origin, username, password ->
+                                    viewModel.onCredentialCaptured(origin, username, password)
+                                },
+                                PasswordCaptureBridge.INTERFACE_NAME
+                            )
 
                             // Incognito: don't persist cache/cookies for this session.
                             if (incognitoState.value) {
@@ -619,6 +626,8 @@ fun BrowserScreen(
                                             evaluateJavascript("(function(){try{${script.code}}catch(e){console.error(e)}})();", null)
                                         }
                                     }
+                                    evaluateJavascript(PasswordCaptureBridge.CAPTURE_JS, null)
+                                    viewModel.onPageOriginLoaded(url)
                                 },
                                 onError = { viewModel.updateTitle("Error") },
                                 adBlockerEnabled = { adBlockOnState.value },
@@ -854,10 +863,50 @@ fun BrowserScreen(
             onDismiss = { downloadViewModel.dismissQualityPicker() }
         )
     }
-}
+    val pendingCredentialSave by viewModel.pendingCredentialSave.collectAsState()
+    pendingCredentialSave?.let { pending ->
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissSaveCredential() },
+            icon = { Icon(Icons.Default.Password, null) },
+            title = { Text("Save password?") },
+            text = { Text("Save this password for ${prettifyUrl(pending.origin)}${if (pending.username.isNotBlank()) " (${pending.username})" else ""}?") },
+            confirmButton = {
+                TextButton(onClick = { viewModel.confirmSaveCredential() }) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.dismissSaveCredential() }) { Text("Never") }
+            }
+        )
+    }
 
-@Composable
-private fun BrowserOverflowMenu(
+    val fillableCredential by viewModel.fillableCredential.collectAsState()
+    fillableCredential?.let { credential ->
+        Box(modifier = Modifier.fillMaxSize().padding(bottom = 16.dp), contentAlignment = Alignment.BottomCenter) {
+            ElevatedCard(
+                onClick = {
+                    webView?.evaluateJavascript(
+                        PasswordCaptureBridge.fillCredentialJs(credential.username, credential.password),
+                        null
+                    )
+                    viewModel.clearFillableCredential()
+                }
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.Password, null, tint = Primary)
+                    Spacer(Modifier.width(10.dp))
+                    Text("Fill saved login for ${credential.username.ifBlank { "this site" }}", style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.width(10.dp))
+                    IconButton(onClick = { viewModel.clearFillableCredential() }, modifier = Modifier.size(20.dp)) {
+                        Icon(Icons.Default.Close, "Dismiss", modifier = Modifier.size(16.dp))
+                    }
+                }
+            }
+        }
+    }
+}
     expanded: Boolean,
     onDismiss: () -> Unit,
     canGoForward: Boolean,
