@@ -917,6 +917,9 @@ fun BrowserScreen(
         }
     }
 }
+
+@Composable
+fun BrowserOverflowMenu(
     expanded: Boolean,
     onDismiss: () -> Unit,
     canGoForward: Boolean,
