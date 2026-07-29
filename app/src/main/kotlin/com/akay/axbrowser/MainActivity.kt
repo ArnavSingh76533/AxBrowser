@@ -8,6 +8,7 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
@@ -33,6 +34,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val appLockViewModel: AppLockViewModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -41,6 +44,9 @@ class MainActivity : ComponentActivity() {
         setContent {
             val themeViewModel: AppThemeViewModel = hiltViewModel()
             val theme by themeViewModel.state.collectAsState()
+            val lockConfig by appLockViewModel.config.collectAsState()
+            val isUnlocked by appLockViewModel.isUnlocked.collectAsState()
+
             AxTheme(
                 darkTheme = theme.isDarkMode,
                 amoled = theme.amoled,
@@ -51,9 +57,23 @@ class MainActivity : ComponentActivity() {
                 )
             ) {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    BrowserNavHost()
+                    if (lockConfig.enabled && !isUnlocked) {
+                        AppLockScreen(
+                            viewModel = appLockViewModel,
+                            onUnlocked = {}
+                        )
+                    } else {
+                        BrowserNavHost()
+                    }
                 }
             }
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        if (appLockViewModel.config.value.enabled) {
+            appLockViewModel.lock()
         }
     }
 
