@@ -3,16 +3,34 @@ package com.akay.feature.browser.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.akay.core.data.datastore.AxPreferences
+import com.akay.feature.browser.adblock.AdBlockEngine
 import com.akay.core.domain.model.Bookmark
 import com.akay.core.domain.model.HistoryItem
+import com.akay.core.domain.model.SavedCredential
+import com.akay.core.domain.model.SitePermissionType
 import com.akay.core.domain.model.Tab
+import com.akay.core.domain.repository.AdBlockRepository
 import com.akay.core.domain.repository.BookmarkRepository
 import com.akay.core.domain.repository.HistoryRepository
+import com.akay.core.domain.repository.PasswordRepository
 import com.akay.core.domain.repository.TabRepository
+import com.akay.feature.browser.suggest.SearchSuggestion
+import com.akay.feature.browser.suggest.SearchSuggestionProvider
+import com.akay.feature.browser.suggest.SuggestionType
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.net.URLEncoder
 import java.util.UUID
@@ -34,7 +52,8 @@ data class BrowserUiState(
     val showDownloadSheet: Boolean = false,
     val devConsoleVisible: Boolean = false,
     val pageHtml: String = "",
-    val detectedMediaCount: Int = 0
+    val detectedMediaCount: Int = 0,
+    val batterySaverEnabled: Boolean = false
 )
 
 sealed class BrowserUiEvent {
@@ -43,12 +62,16 @@ sealed class BrowserUiEvent {
     data class NavigateToUrl(val url: String) : BrowserUiEvent()
 }
 
+@OptIn(FlowPreview::class)
 @HiltViewModel
 class BrowserViewModel @Inject constructor(
     private val tabRepository: TabRepository,
     private val historyRepository: HistoryRepository,
     private val bookmarkRepository: BookmarkRepository,
-    private val preferences: AxPreferences
+    private val preferences: AxPreferences,
+    private val suggestionProvider: SearchSuggestionProvider,
+    private val adBlockRepository: AdBlockRepository,
+    private val passwordRepository: PasswordRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(BrowserUiState())
@@ -69,10 +92,158 @@ class BrowserViewModel @Inject constructor(
 
     private var searchEngineUrl: String = "https://www.google.com/search?q="
 
+    private val addressQuery = MutableStateFlow("")
+
+    val suggestions: StateFlow<List<SearchSuggestion>> = addressQuery
+        .debounce(180)
+        .distinctUntilChanged()
+        .flatMapLatest { query ->
+            if (query.isBlank() || looksLikeUrl(query)) {
+                flowOf(emptyList())
+            } else {
+                combine(
+                    bookmarkRepository.searchBookmarks(query),
+                    historyRepository.searchHistory(query)
+                ) { bookmarks, history ->
+                    val local = buildList {
+                        bookmarks.take(3).forEach {
+                            add(SearchSuggestion(text = it.title.ifBlank { it.url }, subtitle = it.url, url = it.url, type = SuggestionType.BOOKMARK))
+                        }
+                        history.take(3).forEach {
+                            add(SearchSuggestion(text = it.title.ifBlank { it.url }, subtitle = it.url, url = it.url, type = SuggestionType.HISTORY))
+                        }
+                    }
+                    local
+                }.flatMapLatest { local ->
+                    flow {
+                        emit(local)
+                        val remote = suggestionProvider.fetchRemoteSuggestions(query)
+                        emit(local + remote.filter { r -> local.none { it.text.equals(r.text, ignoreCase = true) } })
+                    }
+                }
+            }
+        }
+        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private fun looksLikeUrl(text: String): Boolean {
+        val t = text.trim()
+        return t.startsWith("http://") || t.startsWith("https://") || t.startsWith("about:") ||
+            (t.contains(".") && !t.contains(" ") && !t.startsWith("."))
+    }
+
+    fun onAddressQueryChanged(query: String) {
+        updateUrl(query)
+        addressQuery.value = query
+    }
+
     init {
         loadTabs()
         viewModelScope.launch {
             preferences.searchEngine.collect { searchEngineUrl = it }
+        }
+        viewModelScope.launch {
+            preferences.batterySaverEnabled.collect { enabled ->
+                _uiState.value = _uiState.value.copy(batterySaverEnabled = enabled)
+            }
+        }
+        viewModelScope.launch {
+            adBlockRepository.observeAllBlockedHosts().collect { hosts ->
+                AdBlockEngine.setCustomHosts(hosts.toHashSet())
+            }
+        }
+        viewModelScope.launch {
+            adBlockRepository.observeDisabledOrigins(SitePermissionType.AD_BLOCK).collect { origins ->
+                AdBlockEngine.setAllowlistedOrigins(origins.toHashSet())
+            }
+        }
+    }
+
+    private fun currentOrigin(): String? =
+        runCatching { java.net.URI(_uiState.value.displayUrl).let { "${it.scheme}://${it.host}" } }.getOrNull()
+
+    fun isAdBlockAllowlistedForCurrentSite(): Boolean = AdBlockEngine.isOriginAllowlisted(currentOrigin())
+
+    fun toggleAdBlockForCurrentSite() {
+        val origin = currentOrigin() ?: return
+        viewModelScope.launch {
+            val enabled = adBlockRepository.isEnabledForOrigin(origin, SitePermissionType.AD_BLOCK)
+            adBlockRepository.setEnabledForOrigin(origin, SitePermissionType.AD_BLOCK, !enabled)
+        }
+    }
+
+    // ---- Password manager ----
+
+    data class PendingCredentialSave(val origin: String, val username: String, val password: String)
+
+    private val _pendingCredentialSave = MutableStateFlow<PendingCredentialSave?>(null)
+    val pendingCredentialSave: StateFlow<PendingCredentialSave?> = _pendingCredentialSave.asStateFlow()
+
+    private val _fillableCredential = MutableStateFlow<SavedCredential?>(null)
+    val fillableCredential: StateFlow<SavedCredential?> = _fillableCredential.asStateFlow()
+
+    /** Called by the JS bridge when a login form with a non-empty password is submitted. */
+    fun onCredentialCaptured(origin: String, username: String, password: String) {
+        viewModelScope.launch {
+            val existing = passwordRepository.getForOrigin(origin).firstOrNull { it.username == username }
+            if (existing?.password == password) return@launch // already saved, nothing to prompt
+            _pendingCredentialSave.value = PendingCredentialSave(origin, username, password)
+        }
+    }
+
+    fun confirmSaveCredential() {
+        val pending = _pendingCredentialSave.value ?: return
+        viewModelScope.launch {
+            passwordRepository.save(pending.origin, pending.username, pending.password)
+            _pendingCredentialSave.value = null
+        }
+    }
+
+    fun dismissSaveCredential() {
+        _pendingCredentialSave.value = null
+    }
+
+    /** Called on every page load to check whether we have a saved login to offer to autofill. */
+    fun onPageOriginLoaded(url: String) {
+        val origin = runCatching { java.net.URI(url).let { "${it.scheme}://${it.host}" } }.getOrNull()
+        if (origin == null) {
+            _fillableCredential.value = null
+            return
+        }
+        viewModelScope.launch {
+            _fillableCredential.value = passwordRepository.getForOrigin(origin).firstOrNull()
+        }
+    }
+
+    fun clearFillableCredential() {
+        _fillableCredential.value = null
+    }
+
+    // ---- Tab groups ----
+
+    val groupColors = listOf(0xFFB388FF, 0xFF80D8FF, 0xFFFF8A80, 0xFFFFD180, 0xFFA7FFEB, 0xFFCCFF90)
+
+    fun groupTabs(tabIds: List<String>, groupName: String, colorArgb: Long) {
+        if (tabIds.isEmpty()) return
+        val groupId = java.util.UUID.randomUUID().toString()
+        viewModelScope.launch {
+            tabIds.forEach { id ->
+                tabRepository.assignTabToGroup(id, groupId, groupName, colorArgb.toInt())
+            }
+            loadTabs()
+        }
+    }
+
+    fun addTabToExistingGroup(tabId: String, groupId: String, groupName: String, colorArgb: Int) {
+        viewModelScope.launch {
+            tabRepository.assignTabToGroup(tabId, groupId, groupName, colorArgb)
+            loadTabs()
+        }
+    }
+
+    fun removeTabFromGroup(tabId: String) {
+        viewModelScope.launch {
+            tabRepository.clearTabGroup(tabId)
+            loadTabs()
         }
     }
 

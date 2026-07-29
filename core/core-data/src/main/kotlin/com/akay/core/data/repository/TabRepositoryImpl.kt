@@ -52,4 +52,12 @@ class TabRepositoryImpl @Inject constructor(
     override suspend fun getTabCount(): Int {
         return tabDao.getTabCount()
     }
+
+    override suspend fun assignTabToGroup(tabId: String, groupId: String?, groupName: String?, groupColor: Int?) {
+        tabDao.assignGroup(tabId, groupId, groupName, groupColor)
+    }
+
+    override suspend fun clearTabGroup(tabId: String) {
+        tabDao.clearGroup(tabId)
+    }
 }

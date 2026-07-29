@@ -6,7 +6,10 @@ import com.akay.core.data.datastore.AxPreferences
 import com.akay.core.data.db.AxDatabase
 import com.akay.core.data.db.dao.BookmarkDao
 import com.akay.core.data.db.dao.DownloadDao
+import com.akay.core.data.db.dao.FilterListDao
 import com.akay.core.data.db.dao.HistoryDao
+import com.akay.core.data.db.dao.PasswordDao
+import com.akay.core.data.db.dao.PermissionDao
 import com.akay.core.data.db.dao.TabDao
 import dagger.Module
 import dagger.Provides
@@ -28,7 +31,7 @@ object DataModule {
             context,
             AxDatabase::class.java,
             "axbrowser_database"
-        ).build()
+        ).fallbackToDestructiveMigration().build()
     }
 
     @Provides
@@ -42,6 +45,15 @@ object DataModule {
 
     @Provides
     fun provideDownloadDao(database: AxDatabase): DownloadDao = database.downloadDao()
+
+    @Provides
+    fun provideFilterListDao(database: AxDatabase): FilterListDao = database.filterListDao()
+
+    @Provides
+    fun providePermissionDao(database: AxDatabase): PermissionDao = database.permissionDao()
+
+    @Provides
+    fun providePasswordDao(database: AxDatabase): PasswordDao = database.passwordDao()
 
     @Provides
     @Singleton

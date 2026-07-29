@@ -18,6 +18,7 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -50,8 +51,11 @@ import com.akay.core.ui.theme.Primary
 import com.akay.feature.browser.adblock.AdBlockEngine
 import com.akay.feature.browser.devconsole.DevConsolePanel
 import com.akay.feature.browser.devconsole.NetworkInterceptor
+import com.akay.feature.browser.reader.ReaderMode
+import com.akay.feature.browser.gesture.edgeSwipeNavigation
 import com.akay.feature.browser.viewmodel.BrowserViewModel
 import com.akay.feature.browser.webview.AxNetBridge
+import com.akay.feature.browser.webview.PasswordCaptureBridge
 import com.akay.feature.browser.webview.AxWebChromeClient
 import com.akay.feature.browser.webview.AxWebViewClient
 import com.akay.feature.browser.webview.HttpHeaderUtil
@@ -102,8 +106,14 @@ fun BrowserScreen(
     var findActiveMatch by remember { mutableIntStateOf(0) }
     var findTotalMatches by remember { mutableIntStateOf(0) }
 
+    // Reader mode state
+    var readerModeActive by remember { mutableStateOf(false) }
+    var readerModeLoading by remember { mutableStateOf(false) }
+    var preReaderUrl by remember { mutableStateOf<String?>(null) }
+
     val networkMedia by NetworkInterceptor.detectedMedia.collectAsState()
     val blockedCount by AdBlockEngine.blockedCount.collectAsState()
+    val suggestions by viewModel.suggestions.collectAsState()
 
     // Preferences
     val erudaEnabled by viewModel.erudaEnabled.collectAsState(initial = false)
@@ -209,7 +219,7 @@ fun BrowserScreen(
                             if (isEditingUrl) {
                                 OutlinedTextField(
                                     value = uiState.displayUrl,
-                                    onValueChange = { viewModel.updateUrl(it) },
+                                    onValueChange = { viewModel.onAddressQueryChanged(it) },
                                     modifier = Modifier.fillMaxWidth(),
                                     singleLine = true,
                                     placeholder = {
@@ -356,6 +366,34 @@ fun BrowserScreen(
                                     findActiveMatch = 0
                                     findTotalMatches = 0
                                 },
+                                readerModeActive = readerModeActive,
+                                onToggleReaderMode = {
+                                    val wv = webView
+                                    if (wv == null) {
+                                        // no-op
+                                    } else if (readerModeActive) {
+                                        readerModeActive = false
+                                        preReaderUrl?.let { wv.loadUrl(it) }
+                                    } else {
+                                        readerModeLoading = true
+                                        wv.evaluateJavascript(ReaderMode.EXTRACTION_JS) { result ->
+                                            readerModeLoading = false
+                                            val article = ReaderMode.parse(result)
+                                            if (article == null) {
+                                                Toast.makeText(context, "Couldn't extract article text", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                preReaderUrl = uiState.displayUrl
+                                                readerModeActive = true
+                                                val html = ReaderMode.buildReaderHtml(
+                                                    article,
+                                                    fontSizePercent = fontSize,
+                                                    darkMode = true
+                                                )
+                                                wv.loadDataWithBaseURL(uiState.displayUrl, html, "text/html", "UTF-8", null)
+                                            }
+                                        }
+                                    }
+                                },
                                 onToggleDesktop = { viewModel.setDesktopMode(!desktopMode) },
                                 onScreenshot = {
                                     val ok = webView?.let { captureAndShare(it, context) } ?: false
@@ -368,8 +406,62 @@ fun BrowserScreen(
                                         viewModel.navigateToUrl("https://translate.google.com/translate?sl=auto&tl=en&u=$enc")
                                     }
                                 },
-                                onDevConsole = { viewModel.toggleDevConsole() }
+                                onDevConsole = { viewModel.toggleDevConsole() },
+                                siteAdBlockAllowlisted = viewModel.isAdBlockAllowlistedForCurrentSite(),
+                                onToggleSiteAdBlock = { viewModel.toggleAdBlockForCurrentSite() }
                             )
+                        }
+                    }
+
+                    AnimatedVisibility(visible = isEditingUrl && suggestions.isNotEmpty()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.surface)
+                        ) {
+                            suggestions.take(6).forEach { suggestion ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            val target = suggestion.url ?: suggestion.text
+                                            isEditingUrl = false
+                                            keyboardController?.hide()
+                                            viewModel.navigateToUrl(target)
+                                        }
+                                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = when (suggestion.type) {
+                                            com.akay.feature.browser.suggest.SuggestionType.BOOKMARK -> Icons.Default.Star
+                                            com.akay.feature.browser.suggest.SuggestionType.HISTORY -> Icons.Default.History
+                                            com.akay.feature.browser.suggest.SuggestionType.REMOTE -> Icons.Default.Search
+                                        },
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            suggestion.text,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (!suggestion.subtitle.isNullOrBlank()) {
+                                            Text(
+                                                suggestion.subtitle,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -446,6 +538,12 @@ fun BrowserScreen(
                             setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
 
                             addJavascriptInterface(AxNetBridge(), "AxNet")
+                            addJavascriptInterface(
+                                PasswordCaptureBridge { origin, username, password ->
+                                    viewModel.onCredentialCaptured(origin, username, password)
+                                },
+                                PasswordCaptureBridge.INTERFACE_NAME
+                            )
 
                             // Incognito: don't persist cache/cookies for this session.
                             if (incognitoState.value) {
@@ -528,6 +626,8 @@ fun BrowserScreen(
                                             evaluateJavascript("(function(){try{${script.code}}catch(e){console.error(e)}})();", null)
                                         }
                                     }
+                                    evaluateJavascript(PasswordCaptureBridge.CAPTURE_JS, null)
+                                    viewModel.onPageOriginLoaded(url)
                                 },
                                 onError = { viewModel.updateTitle("Error") },
                                 adBlockerEnabled = { adBlockOnState.value },
@@ -559,6 +659,13 @@ fun BrowserScreen(
                         if (wv.settings.textZoom != fontSize) {
                             wv.settings.textZoom = fontSize
                         }
+                        run {
+                            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+                            val caps = cm?.getNetworkCapabilities(cm.activeNetwork)
+                            val onWifi = caps == null || caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) ||
+                                caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET)
+                            wv.settings.blockNetworkImage = uiState.batterySaverEnabled && !onWifi
+                        }
                         @Suppress("DEPRECATION")
                         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                             wv.settings.forceDark = if (darkWebsites)
@@ -578,7 +685,15 @@ fun BrowserScreen(
                             else wv.loadUrl(uiState.url, customHeadersState.value)
                         }
                     },
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .edgeSwipeNavigation(
+                            enabled = !readerModeActive,
+                            canGoBack = uiState.canGoBack,
+                            canGoForward = uiState.canGoForward,
+                            onSwipeBack = { webView?.goBack() },
+                            onSwipeForward = { webView?.goForward() }
+                        )
                 )
             }
 
@@ -593,7 +708,10 @@ fun BrowserScreen(
                     onTabClick = { viewModel.setActiveTab(it) },
                     onCloseTab = { viewModel.closeTab(it) },
                     onNewTab = { incognito -> viewModel.createNewTab(incognito = incognito) },
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize(),
+                    onGroupTabs = { ids, name, color -> viewModel.groupTabs(ids, name, color) },
+                    onAddToGroup = { tabId, groupId, name, color -> viewModel.addTabToExistingGroup(tabId, groupId, name, color) },
+                    onRemoveFromGroup = { tabId -> viewModel.removeTabFromGroup(tabId) }
                 )
             }
 
@@ -755,10 +873,50 @@ fun BrowserScreen(
             onDismiss = { downloadViewModel.dismissQualityPicker() }
         )
     }
-}
+    val pendingCredentialSave by viewModel.pendingCredentialSave.collectAsState()
+    pendingCredentialSave?.let { pending ->
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissSaveCredential() },
+            icon = { Icon(Icons.Default.Password, null) },
+            title = { Text("Save password?") },
+            text = { Text("Save this password for ${prettifyUrl(pending.origin)}${if (pending.username.isNotBlank()) " (${pending.username})" else ""}?") },
+            confirmButton = {
+                TextButton(onClick = { viewModel.confirmSaveCredential() }) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.dismissSaveCredential() }) { Text("Never") }
+            }
+        )
+    }
 
-@Composable
-private fun BrowserOverflowMenu(
+    val fillableCredential by viewModel.fillableCredential.collectAsState()
+    fillableCredential?.let { credential ->
+        Box(modifier = Modifier.fillMaxSize().padding(bottom = 16.dp), contentAlignment = Alignment.BottomCenter) {
+            ElevatedCard(
+                onClick = {
+                    webView?.evaluateJavascript(
+                        PasswordCaptureBridge.fillCredentialJs(credential.username, credential.password),
+                        null
+                    )
+                    viewModel.clearFillableCredential()
+                }
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.Password, null, tint = Primary)
+                    Spacer(Modifier.width(10.dp))
+                    Text("Fill saved login for ${credential.username.ifBlank { "this site" }}", style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.width(10.dp))
+                    IconButton(onClick = { viewModel.clearFillableCredential() }, modifier = Modifier.size(20.dp)) {
+                        Icon(Icons.Default.Close, "Dismiss", modifier = Modifier.size(16.dp))
+                    }
+                }
+            }
+        }
+    }
+}
     expanded: Boolean,
     onDismiss: () -> Unit,
     canGoForward: Boolean,
@@ -772,13 +930,28 @@ private fun BrowserOverflowMenu(
     onAddBookmark: () -> Unit,
     onShare: () -> Unit,
     onFindInPage: () -> Unit,
+    readerModeActive: Boolean,
+    onToggleReaderMode: () -> Unit,
     onToggleDesktop: () -> Unit,
     onScreenshot: () -> Unit,
     onTranslate: () -> Unit,
-    onDevConsole: () -> Unit
+    onDevConsole: () -> Unit,
+    siteAdBlockAllowlisted: Boolean,
+    onToggleSiteAdBlock: () -> Unit
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
         if (adBlockOn) {
+            DropdownMenuItem(
+                text = { Text(if (siteAdBlockAllowlisted) "Ad-block disabled on this site" else "Ad-block enabled on this site") },
+                leadingIcon = {
+                    Icon(
+                        Icons.Default.Shield,
+                        null,
+                        tint = if (siteAdBlockAllowlisted) MaterialTheme.colorScheme.onSurfaceVariant else Primary
+                    )
+                },
+                onClick = { onDismiss(); onToggleSiteAdBlock() }
+            )
             DropdownMenuItem(
                 text = {
                     Text(
@@ -824,6 +997,11 @@ private fun BrowserOverflowMenu(
             text = { Text("Find in page") },
             leadingIcon = { Icon(Icons.Default.Search, null) },
             onClick = { onDismiss(); onFindInPage() }
+        )
+        DropdownMenuItem(
+            text = { Text(if (readerModeActive) "Exit reader mode" else "Reader mode") },
+            leadingIcon = { Icon(Icons.Default.Article, null, tint = if (readerModeActive) Primary else LocalContentColor.current) },
+            onClick = { onDismiss(); onToggleReaderMode() }
         )
         DropdownMenuItem(
             text = { Text("Translate page") },

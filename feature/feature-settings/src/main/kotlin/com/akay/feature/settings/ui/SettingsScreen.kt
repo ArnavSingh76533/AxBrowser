@@ -69,6 +69,8 @@ import com.akay.feature.settings.viewmodel.SettingsViewModel
 fun SettingsScreen(
     onBack: () -> Unit,
     onOpenExtensions: () -> Unit = {},
+    onOpenFilterLists: () -> Unit = {},
+    onOpenPasswords: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -214,6 +216,72 @@ fun SettingsScreen(
                     checked = uiState.isAdBlockerEnabled,
                     onCheckedChange = { viewModel.setAdBlockerEnabled(it) }
                 )
+                SettingsNavigationItem(
+                    title = "Filter lists",
+                    subtitle = "Subscribe to community ad/tracker block lists",
+                    onClick = onOpenFilterLists
+                )
+                SettingsNavigationItem(
+                    title = "Saved passwords",
+                    subtitle = "Manage logins AxBrowser has saved for you",
+                    onClick = onOpenPasswords
+                )
+                var showPinDialog by remember { mutableStateOf(false) }
+                var pinInput by remember { mutableStateOf("") }
+                SettingsSwitchItem(
+                    title = "App Lock",
+                    subtitle = if (uiState.appLockPinSet) "Require PIN/biometric to open AxBrowser" else "Set a PIN first to enable",
+                    checked = uiState.appLockEnabled,
+                    onCheckedChange = { enable ->
+                        if (enable && !uiState.appLockPinSet) {
+                            pinInput = ""
+                            showPinDialog = true
+                        } else {
+                            viewModel.setAppLockEnabled(enable)
+                        }
+                    }
+                )
+                if (uiState.appLockEnabled || uiState.appLockPinSet) {
+                    SettingsSwitchItem(
+                        title = "Use biometric unlock",
+                        subtitle = "Fall back to fingerprint/face where available",
+                        checked = uiState.appLockUseBiometric,
+                        onCheckedChange = { viewModel.setAppLockUseBiometric(it) }
+                    )
+                    SettingsNavigationItem(
+                        title = "Change PIN",
+                        subtitle = "Update your 4-digit app-lock PIN",
+                        onClick = { pinInput = ""; showPinDialog = true }
+                    )
+                }
+                if (showPinDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showPinDialog = false },
+                        title = { Text("Set a 4-digit PIN") },
+                        text = {
+                            OutlinedTextField(
+                                value = pinInput,
+                                onValueChange = { if (it.length <= 4 && it.all(Char::isDigit)) pinInput = it },
+                                label = { Text("PIN") },
+                                singleLine = true,
+                                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation()
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(
+                                enabled = pinInput.length == 4,
+                                onClick = {
+                                    viewModel.setAppLockPin(pinInput)
+                                    viewModel.setAppLockEnabled(true)
+                                    showPinDialog = false
+                                }
+                            ) { Text("Save") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showPinDialog = false }) { Text("Cancel") }
+                        }
+                    )
+                }
                 SettingsSwitchItem(
                     title = "HTTPS Upgrade",
                     subtitle = "Force HTTPS where possible",
@@ -297,6 +365,18 @@ fun SettingsScreen(
                     title = "Clear cache on exit",
                     checked = uiState.clearCacheOnExit,
                     onCheckedChange = { viewModel.setClearCacheOnExit(it) }
+                )
+                SettingsSwitchItem(
+                    title = "Wi-Fi only downloads",
+                    subtitle = "Pause downloads automatically on mobile data",
+                    checked = uiState.wifiOnlyDownloads,
+                    onCheckedChange = { viewModel.setWifiOnlyDownloads(it) }
+                )
+                SettingsSwitchItem(
+                    title = "Battery saver",
+                    subtitle = "Block images and reduce animations on mobile data / low battery",
+                    checked = uiState.batterySaverEnabled,
+                    onCheckedChange = { viewModel.setBatterySaverEnabled(it) }
                 )
             }
 

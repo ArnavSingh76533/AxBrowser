@@ -4,9 +4,9 @@ import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
-@Entity(tableName = "blocked_domains")
+@Entity(tableName = "blocked_domains", primaryKeys = ["domain", "list_source"])
 data class BlockedDomainEntity(
-    @PrimaryKey val domain: String,
+    val domain: String,
     @ColumnInfo(name = "list_source") val listSource: String,
     @ColumnInfo(name = "added_at") val addedAt: Long
 )

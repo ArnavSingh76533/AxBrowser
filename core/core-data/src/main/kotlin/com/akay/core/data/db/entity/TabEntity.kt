@@ -14,5 +14,8 @@ data class TabEntity(
     @ColumnInfo(name = "is_incognito") val isIncognito: Boolean = false,
     @ColumnInfo(name = "created_at") val createdAt: Long,
     @ColumnInfo(name = "last_accessed") val lastAccessed: Long,
-    @ColumnInfo(name = "is_active") val isActive: Boolean = false
+    @ColumnInfo(name = "is_active") val isActive: Boolean = false,
+    @ColumnInfo(name = "group_id") val groupId: String? = null,
+    @ColumnInfo(name = "group_name") val groupName: String? = null,
+    @ColumnInfo(name = "group_color") val groupColor: Int? = null
 )

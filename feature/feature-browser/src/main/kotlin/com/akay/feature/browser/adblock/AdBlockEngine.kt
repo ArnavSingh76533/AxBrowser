@@ -16,7 +16,13 @@ import kotlinx.coroutines.withContext
 object AdBlockEngine {
 
     @Volatile
-    private var blockedHosts: Set<String> = emptySet()
+    private var bundledHosts: Set<String> = emptySet()
+
+    @Volatile
+    private var customHosts: Set<String> = emptySet()
+
+    @Volatile
+    private var allowlistedOrigins: Set<String> = emptySet()
 
     @Volatile
     private var loaded = false
@@ -46,18 +52,33 @@ object AdBlockEngine {
                         .toHashSet()
                 }
             }.getOrDefault(hashSetOf())
-            blockedHosts = hosts
+            bundledHosts = hosts
             loaded = true
         }
     }
 
-    fun shouldBlock(url: String): Boolean {
-        if (blockedHosts.isEmpty()) return false
+    /** Called with the merged host set from all active filter-list subscriptions. */
+    fun setCustomHosts(hosts: Set<String>) {
+        customHosts = hosts
+    }
+
+    /** Origins (scheme://host) where the user has explicitly disabled ad-blocking. */
+    fun setAllowlistedOrigins(origins: Set<String>) {
+        allowlistedOrigins = origins
+    }
+
+    fun isOriginAllowlisted(origin: String?): Boolean {
+        if (origin.isNullOrBlank()) return false
+        return allowlistedOrigins.any { origin.endsWith(it, ignoreCase = true) }
+    }
+
+    fun shouldBlock(url: String, pageOrigin: String? = null): Boolean {
+        if (isOriginAllowlisted(pageOrigin)) return false
         val host = runCatching { java.net.URI(url).host?.lowercase() }.getOrNull() ?: return false
 
         var candidate = host
         while (true) {
-            if (candidate in blockedHosts) return true
+            if (candidate in bundledHosts || candidate in customHosts) return true
             val dot = candidate.indexOf('.')
             if (dot < 0) break
             candidate = candidate.substring(dot + 1)

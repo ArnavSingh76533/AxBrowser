@@ -49,7 +49,13 @@ data class SettingsUiState(
     val accentName: String = "Nebula Violet",
     val galaxyEnabled: Boolean = true,
     val animationIntensity: Int = 100,
-    val darkModeForWebsites: Boolean = false
+    val darkModeForWebsites: Boolean = false,
+    val appLockEnabled: Boolean = false,
+    val appLockPinSet: Boolean = false,
+    val appLockUseBiometric: Boolean = true,
+    val wifiOnlyDownloads: Boolean = false,
+    val batterySaverEnabled: Boolean = false,
+    val themePreset: String = "Nebula"
 ) {
     val searchEngineName: String
         get() = SEARCH_ENGINES.firstOrNull { it.url == searchEngineUrl }?.name ?: "Custom"
@@ -159,6 +165,24 @@ class SettingsViewModel @Inject constructor(
             preferences.galaxyEnabled.collect { _uiState.value = _uiState.value.copy(galaxyEnabled = it) }
         }
         viewModelScope.launch {
+            preferences.appLockEnabled.collect { _uiState.value = _uiState.value.copy(appLockEnabled = it) }
+        }
+        viewModelScope.launch {
+            preferences.appLockPinHash.collect { _uiState.value = _uiState.value.copy(appLockPinSet = !it.isNullOrBlank()) }
+        }
+        viewModelScope.launch {
+            preferences.appLockUseBiometric.collect { _uiState.value = _uiState.value.copy(appLockUseBiometric = it) }
+        }
+        viewModelScope.launch {
+            preferences.wifiOnlyDownloads.collect { _uiState.value = _uiState.value.copy(wifiOnlyDownloads = it) }
+        }
+        viewModelScope.launch {
+            preferences.batterySaverEnabled.collect { _uiState.value = _uiState.value.copy(batterySaverEnabled = it) }
+        }
+        viewModelScope.launch {
+            preferences.themePreset.collect { _uiState.value = _uiState.value.copy(themePreset = it) }
+        }
+        viewModelScope.launch {
             preferences.animationIntensity.collect { _uiState.value = _uiState.value.copy(animationIntensity = it) }
         }
         viewModelScope.launch {
@@ -177,6 +201,21 @@ class SettingsViewModel @Inject constructor(
 
     fun setDarkMode(enabled: Boolean) { viewModelScope.launch { preferences.setDarkMode(enabled) } }
     fun setAdBlockerEnabled(enabled: Boolean) { viewModelScope.launch { preferences.setAdBlockerEnabled(enabled) } }
+
+    fun setAppLockEnabled(enabled: Boolean) { viewModelScope.launch { preferences.setAppLockEnabled(enabled) } }
+    fun setAppLockUseBiometric(enabled: Boolean) { viewModelScope.launch { preferences.setAppLockUseBiometric(enabled) } }
+    fun setAppLockPin(pin: String) {
+        viewModelScope.launch { preferences.setAppLockPinHash(com.akay.core.ui.security.PinHasher.hash(pin)) }
+    }
+    fun clearAppLockPin() {
+        viewModelScope.launch {
+            preferences.setAppLockPinHash(null)
+            preferences.setAppLockEnabled(false)
+        }
+    }
+    fun setWifiOnlyDownloads(enabled: Boolean) { viewModelScope.launch { preferences.setWifiOnlyDownloads(enabled) } }
+    fun setBatterySaverEnabled(enabled: Boolean) { viewModelScope.launch { preferences.setBatterySaverEnabled(enabled) } }
+    fun setThemePreset(name: String) { viewModelScope.launch { preferences.setThemePreset(name) } }
     fun setHttpsUpgrade(enabled: Boolean) { viewModelScope.launch { preferences.setHttpsUpgrade(enabled) } }
     fun setJavascriptEnabled(enabled: Boolean) { viewModelScope.launch { preferences.setJavascriptEnabled(enabled) } }
     fun setDesktopMode(enabled: Boolean) { viewModelScope.launch { preferences.setDesktopMode(enabled) } }

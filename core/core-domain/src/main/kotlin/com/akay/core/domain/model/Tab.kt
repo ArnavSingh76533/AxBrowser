@@ -11,5 +11,8 @@ data class Tab(
     val isIncognito: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
     val lastAccessed: Long = System.currentTimeMillis(),
-    val isActive: Boolean = false
+    val isActive: Boolean = false,
+    val groupId: String? = null,
+    val groupName: String? = null,
+    val groupColor: Int? = null
 )

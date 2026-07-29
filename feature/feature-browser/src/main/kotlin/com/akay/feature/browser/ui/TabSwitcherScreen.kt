@@ -28,10 +28,12 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.combinedClickable
 import com.akay.core.domain.model.Tab
 import com.akay.core.ui.components.GalaxyBackground
 import com.akay.core.ui.theme.LocalAccentColor
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun TabSwitcherOverlay(
     tabs: List<Tab>,
@@ -39,13 +41,28 @@ fun TabSwitcherOverlay(
     onTabClick: (Tab) -> Unit,
     onCloseTab: (String) -> Unit,
     onNewTab: (incognito: Boolean) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    groupColors: List<Long> = listOf(0xFFB388FF, 0xFF80D8FF, 0xFFFF8A80, 0xFFFFD180, 0xFFA7FFEB, 0xFFCCFF90),
+    onGroupTabs: (tabIds: List<String>, name: String, color: Long) -> Unit = { _, _, _ -> },
+    onAddToGroup: (tabId: String, groupId: String, name: String, color: Int) -> Unit = { _, _, _, _ -> },
+    onRemoveFromGroup: (tabId: String) -> Unit = {}
 ) {
     val accent = LocalAccentColor.current
     var showPrivate by remember { mutableStateOf(false) }
     val normalTabs = tabs.filter { !it.isIncognito }
     val privateTabs = tabs.filter { it.isIncognito }
-    val shown = if (showPrivate) privateTabs else normalTabs
+    // Group tabs so members of the same group sit next to each other.
+    val shown = (if (showPrivate) privateTabs else normalTabs)
+        .sortedBy { it.groupId == null } // grouped first
+        .let { list -> list.sortedBy { it.groupId ?: "" } }
+
+    var groupMenuTab by remember { mutableStateOf<Tab?>(null) }
+    var newGroupDialog by remember { mutableStateOf<Tab?>(null) }
+    var newGroupName by remember { mutableStateOf("") }
+
+    val existingGroups = normalTabs.filter { it.groupId != null }
+        .distinctBy { it.groupId }
+        .map { Triple(it.groupId!!, it.groupName ?: "Group", it.groupColor ?: groupColors.first().toInt()) }
 
     GalaxyBackground(modifier = modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
@@ -93,7 +110,8 @@ fun TabSwitcherOverlay(
                             isActive = tab.id == activeTabId,
                             accent = accent,
                             onClick = { onTabClick(tab) },
-                            onClose = { onCloseTab(tab.id) }
+                            onClose = { onCloseTab(tab.id) },
+                            onLongPress = { groupMenuTab = tab }
                         )
                     }
                 }
@@ -110,6 +128,67 @@ fun TabSwitcherOverlay(
                 Text(if (showPrivate) "New private tab" else "New tab", fontWeight = FontWeight.SemiBold)
             }
         }
+    }
+
+    groupMenuTab?.let { tab ->
+        AlertDialog(
+            onDismissRequest = { groupMenuTab = null },
+            title = { Text(if (tab.groupId != null) "Tab group" else "Group this tab") },
+            text = {
+                Column {
+                    if (tab.groupId != null) {
+                        TextButton(onClick = { onRemoveFromGroup(tab.id); groupMenuTab = null }) {
+                            Text("Remove from \"${tab.groupName}\"")
+                        }
+                    }
+                    existingGroups.filter { it.first != tab.groupId }.forEach { (id, name, color) ->
+                        TextButton(onClick = {
+                            onAddToGroup(tab.id, id, name, color)
+                            groupMenuTab = null
+                        }) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(Modifier.size(10.dp).background(Color(color), RoundedCornerShape(50)))
+                                Spacer(Modifier.width(8.dp))
+                                Text("Add to \"$name\"")
+                            }
+                        }
+                    }
+                    TextButton(onClick = {
+                        newGroupDialog = tab
+                        newGroupName = ""
+                        groupMenuTab = null
+                    }) { Text("Start new group\u2026") }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { groupMenuTab = null }) { Text("Close") }
+            }
+        )
+    }
+
+    newGroupDialog?.let { tab ->
+        AlertDialog(
+            onDismissRequest = { newGroupDialog = null },
+            title = { Text("New tab group") },
+            text = {
+                OutlinedTextField(
+                    value = newGroupName,
+                    onValueChange = { newGroupName = it },
+                    label = { Text("Group name") },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = newGroupName.isNotBlank(),
+                    onClick = {
+                        onGroupTabs(listOf(tab.id), newGroupName.trim(), groupColors.random())
+                        newGroupDialog = null
+                    }
+                ) { Text("Create") }
+            },
+            dismissButton = { TextButton(onClick = { newGroupDialog = null }) { Text("Cancel") } }
+        )
     }
 }
 
@@ -152,20 +231,39 @@ fun TabCard(
     isActive: Boolean,
     accent: Color,
     onClick: () -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    onLongPress: () -> Unit = {}
 ) {
     val scale by animateFloatAsState(if (isActive) 1f else 0.98f, spring(stiffness = Spring.StiffnessMedium), label = "tc")
+    val groupColor = tab.groupColor?.let { Color(it) }
     Surface(
         modifier = Modifier
             .fillMaxWidth()
             .height(150.dp)
             .scale(scale)
-            .clickable(onClick = onClick),
+            .combinedClickable(onClick = onClick, onLongClick = onLongPress),
         shape = RoundedCornerShape(16.dp),
         color = Color.White.copy(alpha = 0.05f),
-        border = BorderStroke(if (isActive) 2.dp else 1.dp, if (isActive) accent else Color.White.copy(0.1f))
+        border = BorderStroke(
+            if (isActive) 2.dp else 1.dp,
+            if (isActive) accent else (groupColor ?: Color.White.copy(0.1f))
+        )
     ) {
         Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
+            if (groupColor != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(8.dp).background(groupColor, RoundedCornerShape(50)))
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        tab.groupName ?: "Group",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = groupColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Spacer(Modifier.height(4.dp))
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     if (tab.isIncognito) Icons.Default.VisibilityOff else Icons.Default.Public,
