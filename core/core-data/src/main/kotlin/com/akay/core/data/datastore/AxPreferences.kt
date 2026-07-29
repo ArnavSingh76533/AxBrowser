@@ -41,6 +41,12 @@ class AxPreferences @Inject constructor(
         val GALAXY_ENABLED = booleanPreferencesKey("galaxy_enabled")
         val ANIMATION_INTENSITY = intPreferencesKey("animation_intensity")
         val DARK_MODE_WEBSITES = booleanPreferencesKey("dark_mode_websites")
+        val APP_LOCK_ENABLED = booleanPreferencesKey("app_lock_enabled")
+        val APP_LOCK_PIN_HASH = stringPreferencesKey("app_lock_pin_hash")
+        val APP_LOCK_USE_BIOMETRIC = booleanPreferencesKey("app_lock_use_biometric")
+        val WIFI_ONLY_DOWNLOADS = booleanPreferencesKey("wifi_only_downloads")
+        val BATTERY_SAVER_ENABLED = booleanPreferencesKey("battery_saver_enabled")
+        val THEME_PRESET = stringPreferencesKey("theme_preset")
     }
 
     val searchEngine: Flow<String> = context.dataStore.data.map { it[Keys.SEARCH_ENGINE] ?: "https://www.google.com/search?q=" }
@@ -63,6 +69,12 @@ class AxPreferences @Inject constructor(
     val galaxyEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.GALAXY_ENABLED] ?: true }
     val animationIntensity: Flow<Int> = context.dataStore.data.map { it[Keys.ANIMATION_INTENSITY] ?: 100 }
     val darkModeForWebsites: Flow<Boolean> = context.dataStore.data.map { it[Keys.DARK_MODE_WEBSITES] ?: false }
+    val appLockEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.APP_LOCK_ENABLED] ?: false }
+    val appLockPinHash: Flow<String?> = context.dataStore.data.map { it[Keys.APP_LOCK_PIN_HASH] }
+    val appLockUseBiometric: Flow<Boolean> = context.dataStore.data.map { it[Keys.APP_LOCK_USE_BIOMETRIC] ?: true }
+    val wifiOnlyDownloads: Flow<Boolean> = context.dataStore.data.map { it[Keys.WIFI_ONLY_DOWNLOADS] ?: false }
+    val batterySaverEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.BATTERY_SAVER_ENABLED] ?: false }
+    val themePreset: Flow<String> = context.dataStore.data.map { it[Keys.THEME_PRESET] ?: "Nebula" }
 
     suspend fun setSearchEngine(url: String) { context.dataStore.edit { it[Keys.SEARCH_ENGINE] = url } }
     suspend fun setHomepage(url: String) { context.dataStore.edit { it[Keys.HOMEPAGE] = url } }
@@ -84,4 +96,14 @@ class AxPreferences @Inject constructor(
     suspend fun setGalaxyEnabled(enabled: Boolean) { context.dataStore.edit { it[Keys.GALAXY_ENABLED] = enabled } }
     suspend fun setAnimationIntensity(value: Int) { context.dataStore.edit { it[Keys.ANIMATION_INTENSITY] = value } }
     suspend fun setDarkModeForWebsites(enabled: Boolean) { context.dataStore.edit { it[Keys.DARK_MODE_WEBSITES] = enabled } }
+    suspend fun setAppLockEnabled(enabled: Boolean) { context.dataStore.edit { it[Keys.APP_LOCK_ENABLED] = enabled } }
+    suspend fun setAppLockPinHash(hash: String?) {
+        context.dataStore.edit {
+            if (hash == null) it.remove(Keys.APP_LOCK_PIN_HASH) else it[Keys.APP_LOCK_PIN_HASH] = hash
+        }
+    }
+    suspend fun setAppLockUseBiometric(enabled: Boolean) { context.dataStore.edit { it[Keys.APP_LOCK_USE_BIOMETRIC] = enabled } }
+    suspend fun setWifiOnlyDownloads(enabled: Boolean) { context.dataStore.edit { it[Keys.WIFI_ONLY_DOWNLOADS] = enabled } }
+    suspend fun setBatterySaverEnabled(enabled: Boolean) { context.dataStore.edit { it[Keys.BATTERY_SAVER_ENABLED] = enabled } }
+    suspend fun setThemePreset(name: String) { context.dataStore.edit { it[Keys.THEME_PRESET] = name } }
 }
