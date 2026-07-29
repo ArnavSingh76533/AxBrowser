@@ -708,7 +708,10 @@ fun BrowserScreen(
                     onTabClick = { viewModel.setActiveTab(it) },
                     onCloseTab = { viewModel.closeTab(it) },
                     onNewTab = { incognito -> viewModel.createNewTab(incognito = incognito) },
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize(),
+                    onGroupTabs = { ids, name, color -> viewModel.groupTabs(ids, name, color) },
+                    onAddToGroup = { tabId, groupId, name, color -> viewModel.addTabToExistingGroup(tabId, groupId, name, color) },
+                    onRemoveFromGroup = { tabId -> viewModel.removeTabFromGroup(tabId) }
                 )
             }
 

@@ -21,7 +21,10 @@ fun TabEntity.toDomain(): Tab = Tab(
     isIncognito = isIncognito,
     createdAt = createdAt,
     lastAccessed = lastAccessed,
-    isActive = isActive
+    isActive = isActive,
+    groupId = groupId,
+    groupName = groupName,
+    groupColor = groupColor
 )
 
 fun Tab.toEntity(): TabEntity = TabEntity(
@@ -33,7 +36,10 @@ fun Tab.toEntity(): TabEntity = TabEntity(
     isIncognito = isIncognito,
     createdAt = createdAt,
     lastAccessed = lastAccessed,
-    isActive = isActive
+    isActive = isActive,
+    groupId = groupId,
+    groupName = groupName,
+    groupColor = groupColor
 )
 
 fun BookmarkEntity.toDomain(): Bookmark = Bookmark(

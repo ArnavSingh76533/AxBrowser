@@ -40,4 +40,10 @@ interface TabDao {
 
     @Query("SELECT COUNT(*) FROM tabs")
     suspend fun getTabCount(): Int
+
+    @Query("UPDATE tabs SET group_id = :groupId, group_name = :groupName, group_color = :groupColor WHERE id = :tabId")
+    suspend fun assignGroup(tabId: String, groupId: String?, groupName: String?, groupColor: Int?)
+
+    @Query("UPDATE tabs SET group_id = NULL, group_name = NULL, group_color = NULL WHERE id = :tabId")
+    suspend fun clearGroup(tabId: String)
 }

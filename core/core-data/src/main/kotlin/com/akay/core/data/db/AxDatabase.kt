@@ -29,7 +29,7 @@ import com.akay.core.data.db.entity.TabEntity
         SitePermissionEntity::class,
         PasswordEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = true
 )
 abstract class AxDatabase : RoomDatabase() {

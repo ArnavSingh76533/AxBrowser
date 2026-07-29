@@ -218,6 +218,35 @@ class BrowserViewModel @Inject constructor(
         _fillableCredential.value = null
     }
 
+    // ---- Tab groups ----
+
+    val groupColors = listOf(0xFFB388FF, 0xFF80D8FF, 0xFFFF8A80, 0xFFFFD180, 0xFFA7FFEB, 0xFFCCFF90)
+
+    fun groupTabs(tabIds: List<String>, groupName: String, colorArgb: Long) {
+        if (tabIds.isEmpty()) return
+        val groupId = java.util.UUID.randomUUID().toString()
+        viewModelScope.launch {
+            tabIds.forEach { id ->
+                tabRepository.assignTabToGroup(id, groupId, groupName, colorArgb.toInt())
+            }
+            loadTabs()
+        }
+    }
+
+    fun addTabToExistingGroup(tabId: String, groupId: String, groupName: String, colorArgb: Int) {
+        viewModelScope.launch {
+            tabRepository.assignTabToGroup(tabId, groupId, groupName, colorArgb)
+            loadTabs()
+        }
+    }
+
+    fun removeTabFromGroup(tabId: String) {
+        viewModelScope.launch {
+            tabRepository.clearTabGroup(tabId)
+            loadTabs()
+        }
+    }
+
     fun setDesktopMode(enabled: Boolean) {
         viewModelScope.launch { preferences.setDesktopMode(enabled) }
     }

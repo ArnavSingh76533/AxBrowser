@@ -12,4 +12,6 @@ interface TabRepository {
     suspend fun deleteTab(id: String)
     suspend fun setActiveTab(id: String)
     suspend fun getTabCount(): Int
+    suspend fun assignTabToGroup(tabId: String, groupId: String?, groupName: String?, groupColor: Int?)
+    suspend fun clearTabGroup(tabId: String)
 }
