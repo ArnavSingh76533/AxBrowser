@@ -6,10 +6,16 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.Uri
 import androidx.core.content.FileProvider
+import androidx.core.content.getSystemService
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.akay.core.data.datastore.AxPreferences
 import com.akay.feature.downloads.engine.DirectDownloadEngine
 import com.akay.feature.downloads.engine.DownloadProgressUnified
 import com.akay.feature.downloads.engine.YtDlpEngine
@@ -75,11 +81,16 @@ data class DownloadManagerState(
 
 @HiltViewModel
 class DownloadViewModel @Inject constructor(
-    application: Application
+    application: Application,
+    private val preferences: AxPreferences
 ) : AndroidViewModel(application) {
 
     private val _state = MutableStateFlow(DownloadManagerState())
     val state: StateFlow<DownloadManagerState> = _state.asStateFlow()
+
+    private var wifiOnlyDownloads = false
+    private val pendingWifiQueue = mutableListOf<DownloadItem>()
+    private val connectivityManager: ConnectivityManager? = application.getSystemService()
 
     private val ytDlpEngine = YtDlpEngine(application)
     private val directEngine = DirectDownloadEngine(
@@ -103,7 +114,39 @@ class DownloadViewModel @Inject constructor(
         File(base, "AxBrowser Downloads").also { it.mkdirs() }
     }
 
-    init { checkYtDlp() }
+    init {
+        checkYtDlp()
+        viewModelScope.launch {
+            preferences.wifiOnlyDownloads.collect { wifiOnlyDownloads = it }
+        }
+        registerWifiCallback()
+    }
+
+    private fun isOnWifi(): Boolean {
+        val caps = connectivityManager?.getNetworkCapabilities(connectivityManager.activeNetwork) ?: return true
+        return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+    }
+
+    private fun registerWifiCallback() {
+        val request = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .build()
+        runCatching {
+            connectivityManager?.registerNetworkCallback(request, object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    val toResume = synchronized(pendingWifiQueue) {
+                        val copy = pendingWifiQueue.toList()
+                        pendingWifiQueue.clear()
+                        copy
+                    }
+                    toResume.forEach { item ->
+                        updateItem(item.id) { it.copy(status = ItemStatus.QUEUED, errorMsg = null) }
+                        startDownload(item)
+                    }
+                }
+            })
+        }
+    }
 
     private fun checkYtDlp() {
         val installed = YtDlpSetup.isInstalled(getApplication())
@@ -126,7 +169,12 @@ class DownloadViewModel @Inject constructor(
             errorMsg = if (useYtDlp && !_state.value.ytDlpReady) "yt-dlp not available" else null
         )
         _state.update { it.copy(downloads = it.downloads + item) }
-        startDownload(item)
+        if (wifiOnlyDownloads && !isOnWifi()) {
+            synchronized(pendingWifiQueue) { pendingWifiQueue += item }
+            updateItem(item.id) { it.copy(status = ItemStatus.QUEUED, errorMsg = "Waiting for Wi-Fi\u2026") }
+        } else {
+            startDownload(item)
+        }
         return id
     }
 

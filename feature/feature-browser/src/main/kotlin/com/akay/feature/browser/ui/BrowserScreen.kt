@@ -659,6 +659,13 @@ fun BrowserScreen(
                         if (wv.settings.textZoom != fontSize) {
                             wv.settings.textZoom = fontSize
                         }
+                        run {
+                            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+                            val caps = cm?.getNetworkCapabilities(cm.activeNetwork)
+                            val onWifi = caps == null || caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) ||
+                                caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET)
+                            wv.settings.blockNetworkImage = uiState.batterySaverEnabled && !onWifi
+                        }
                         @Suppress("DEPRECATION")
                         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                             wv.settings.forceDark = if (darkWebsites)

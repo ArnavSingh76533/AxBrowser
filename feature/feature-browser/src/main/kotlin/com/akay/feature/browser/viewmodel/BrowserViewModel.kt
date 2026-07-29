@@ -52,7 +52,8 @@ data class BrowserUiState(
     val showDownloadSheet: Boolean = false,
     val devConsoleVisible: Boolean = false,
     val pageHtml: String = "",
-    val detectedMediaCount: Int = 0
+    val detectedMediaCount: Int = 0,
+    val batterySaverEnabled: Boolean = false
 )
 
 sealed class BrowserUiEvent {
@@ -139,6 +140,11 @@ class BrowserViewModel @Inject constructor(
         loadTabs()
         viewModelScope.launch {
             preferences.searchEngine.collect { searchEngineUrl = it }
+        }
+        viewModelScope.launch {
+            preferences.batterySaverEnabled.collect { enabled ->
+                _uiState.value = _uiState.value.copy(batterySaverEnabled = enabled)
+            }
         }
         viewModelScope.launch {
             adBlockRepository.observeAllBlockedHosts().collect { hosts ->
