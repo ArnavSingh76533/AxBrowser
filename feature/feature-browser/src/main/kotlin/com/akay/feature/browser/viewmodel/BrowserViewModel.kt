@@ -247,6 +247,32 @@ class BrowserViewModel @Inject constructor(
         }
     }
 
+    fun renameGroup(groupId: String, newName: String) {
+        viewModelScope.launch {
+            val members = _uiState.value.tabs.filter { it.groupId == groupId }
+            members.forEach { tab ->
+                tabRepository.assignTabToGroup(tab.id, groupId, newName, tab.groupColor)
+            }
+            loadTabs()
+        }
+    }
+
+    fun ungroupAll(groupId: String) {
+        viewModelScope.launch {
+            val members = _uiState.value.tabs.filter { it.groupId == groupId }
+            members.forEach { tabRepository.clearTabGroup(it.id) }
+            loadTabs()
+        }
+    }
+
+    fun closeGroup(groupId: String) {
+        viewModelScope.launch {
+            val members = _uiState.value.tabs.filter { it.groupId == groupId }
+            members.forEach { tabRepository.deleteTab(it.id) }
+            loadTabs()
+        }
+    }
+
     fun setDesktopMode(enabled: Boolean) {
         viewModelScope.launch { preferences.setDesktopMode(enabled) }
     }

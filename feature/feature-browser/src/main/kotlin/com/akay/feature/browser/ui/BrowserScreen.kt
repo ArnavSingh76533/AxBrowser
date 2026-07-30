@@ -711,7 +711,10 @@ fun BrowserScreen(
                     modifier = Modifier.fillMaxSize(),
                     onGroupTabs = { ids, name, color -> viewModel.groupTabs(ids, name, color) },
                     onAddToGroup = { tabId, groupId, name, color -> viewModel.addTabToExistingGroup(tabId, groupId, name, color) },
-                    onRemoveFromGroup = { tabId -> viewModel.removeTabFromGroup(tabId) }
+                    onRemoveFromGroup = { tabId -> viewModel.removeTabFromGroup(tabId) },
+                    onRenameGroup = { groupId, name -> viewModel.renameGroup(groupId, name) },
+                    onUngroupAll = { groupId -> viewModel.ungroupAll(groupId) },
+                    onCloseGroup = { groupId -> viewModel.closeGroup(groupId) }
                 )
             }
 
