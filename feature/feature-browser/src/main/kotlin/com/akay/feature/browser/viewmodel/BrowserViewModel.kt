@@ -110,7 +110,7 @@ class BrowserViewModel @Inject constructor(
                             add(SearchSuggestion(text = it.title.ifBlank { it.url }, subtitle = it.url, url = it.url, type = SuggestionType.BOOKMARK))
                         }
                         history.take(3).forEach {
-                            add(SearchSuggestion(text = it.title.ifBlank { it.url }, subtitle = it.url, url = it.url, type = SuggestionType.HISTORY))
+                            add(SearchSuggestion(text = it.title?.ifBlank { it.url } ?: it.url, subtitle = it.url, url = it.url, type = SuggestionType.HISTORY))
                         }
                     }
                     local
