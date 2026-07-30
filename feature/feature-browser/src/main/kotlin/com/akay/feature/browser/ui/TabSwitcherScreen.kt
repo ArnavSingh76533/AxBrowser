@@ -225,6 +225,7 @@ private fun SegTab(
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun TabCard(
     tab: Tab,
