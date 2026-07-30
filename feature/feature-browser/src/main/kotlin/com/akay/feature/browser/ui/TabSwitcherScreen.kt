@@ -35,6 +35,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
@@ -137,9 +139,10 @@ fun TabSwitcherOverlay(
             else -> {
                 val targetTab = shown.firstOrNull { it.id == targetKey } ?: return
                 if (targetTab.id == sourceTab.id) return
-                if (targetTab.groupId != null) {
-                    if (sourceTab.groupId == targetTab.groupId) return
-                    onAddToGroup(sourceTab.id, targetTab.groupId, targetTab.groupName ?: "Group", targetTab.groupColor ?: DEFAULT_GROUP_PALETTE.first().toInt())
+                val targetGroupId = targetTab.groupId
+                if (targetGroupId != null) {
+                    if (sourceTab.groupId == targetGroupId) return
+                    onAddToGroup(sourceTab.id, targetGroupId, targetTab.groupName ?: "Group", targetTab.groupColor ?: DEFAULT_GROUP_PALETTE.first().toInt())
                 } else {
                     val color = groupColors[existingGroupCount % groupColors.size]
                     onGroupTabs(listOf(targetTab.id, sourceTab.id), "Group ${existingGroupCount + 1}", color)
