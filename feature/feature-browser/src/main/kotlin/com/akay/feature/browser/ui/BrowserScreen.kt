@@ -52,7 +52,7 @@ import com.akay.feature.browser.adblock.AdBlockEngine
 import com.akay.feature.browser.devconsole.DevConsolePanel
 import com.akay.feature.browser.devconsole.NetworkInterceptor
 import com.akay.feature.browser.reader.ReaderMode
-import com.akay.feature.browser.gesture.edgeSwipeNavigation
+import com.akay.feature.browser.gesture.EdgeSwipeOverlay
 import com.akay.feature.browser.viewmodel.BrowserViewModel
 import com.akay.feature.browser.webview.AxNetBridge
 import com.akay.feature.browser.webview.PasswordCaptureBridge
@@ -516,6 +516,9 @@ fun BrowserScreen(
                                 ViewGroup.LayoutParams.MATCH_PARENT,
                                 ViewGroup.LayoutParams.MATCH_PARENT
                             )
+                            setLayerType(View.LAYER_TYPE_HARDWARE, null)
+                            overScrollMode = View.OVER_SCROLL_ALWAYS
+                            isNestedScrollingEnabled = true
                             settings.javaScriptEnabled = true
                             settings.domStorageEnabled = true
                             settings.databaseEnabled = true
@@ -685,15 +688,15 @@ fun BrowserScreen(
                             else wv.loadUrl(uiState.url, customHeadersState.value)
                         }
                     },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .edgeSwipeNavigation(
-                            enabled = !readerModeActive,
-                            canGoBack = uiState.canGoBack,
-                            canGoForward = uiState.canGoForward,
-                            onSwipeBack = { webView?.goBack() },
-                            onSwipeForward = { webView?.goForward() }
-                        )
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                EdgeSwipeOverlay(
+                    canGoBack = uiState.canGoBack && !readerModeActive,
+                    canGoForward = uiState.canGoForward && !readerModeActive,
+                    onSwipeBack = { webView?.goBack() },
+                    onSwipeForward = { webView?.goForward() },
+                    modifier = Modifier.fillMaxSize()
                 )
             }
 

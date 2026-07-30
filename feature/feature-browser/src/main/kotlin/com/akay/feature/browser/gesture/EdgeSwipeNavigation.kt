@@ -1,57 +1,84 @@
 package com.akay.feature.browser.gesture
 
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.composed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 
 /**
- * Chrome-style edge swipe: a horizontal drag that starts near the left or
- * right edge of the screen triggers back/forward navigation once it passes
- * a distance threshold. Drags that start away from the edges (e.g. normal
- * page scrolling/zooming) are ignored.
+ * Chrome-style edge swipe for browser back/forward, implemented as two thin
+ * (18dp) invisible strips pinned to the left/right screen edges rather than
+ * a gesture detector spanning the whole WebView. A full-surface detector
+ * fights the WebView's native fling/scroll handling for every touch event
+ * and makes page scrolling feel janky; a narrow edge-only strip leaves the
+ * rest of the screen untouched by Compose's pointer input entirely.
  */
-fun Modifier.edgeSwipeNavigation(
-    enabled: Boolean = true,
+@Composable
+fun EdgeSwipeOverlay(
     canGoBack: Boolean,
     canGoForward: Boolean,
     onSwipeBack: () -> Unit,
-    onSwipeForward: () -> Unit
-): Modifier = composed {
-    if (!enabled) return@composed this
+    onSwipeForward: () -> Unit,
+    modifier: Modifier = Modifier,
+    edgeWidth: androidx.compose.ui.unit.Dp = 18.dp
+) {
     val density = LocalDensity.current
-    val edgeWidthPx = with(density) { 24.dp.toPx() }
-    val thresholdPx = with(density) { 80.dp.toPx() }
+    val thresholdPx = remember(density) { with(density) { 80.dp.toPx() } }
 
-    this.pointerInput(canGoBack, canGoForward) {
-        var startX = 0f
-        var startedAtLeftEdge = false
-        var startedAtRightEdge = false
-        var totalDrag = 0f
-        detectHorizontalDragGestures(
-            onDragStart = { offset ->
-                startX = offset.x
-                totalDrag = 0f
-                startedAtLeftEdge = offset.x <= edgeWidthPx
-                startedAtRightEdge = offset.x >= size.width - edgeWidthPx
-            },
-            onHorizontalDrag = { change, dragAmount ->
-                totalDrag += dragAmount
-                if ((startedAtLeftEdge && totalDrag > 0) || (startedAtRightEdge && totalDrag < 0)) {
-                    change.consume()
-                }
-            },
-            onDragEnd = {
-                if (startedAtLeftEdge && totalDrag > thresholdPx && canGoBack) {
-                    onSwipeBack()
-                } else if (startedAtRightEdge && -totalDrag > thresholdPx && canGoForward) {
-                    onSwipeForward()
-                }
-                totalDrag = 0f
-            },
-            onDragCancel = { totalDrag = 0f }
-        )
+    Box(modifier = modifier.fillMaxSize()) {
+        if (canGoBack) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .fillMaxHeight()
+                    .width(edgeWidth)
+                    .pointerInput(Unit) {
+                        var totalDrag = 0f
+                        detectHorizontalDragGestures(
+                            onDragStart = { totalDrag = 0f },
+                            onHorizontalDrag = { change, amount ->
+                                totalDrag += amount
+                                if (totalDrag > 0f) change.consume()
+                            },
+                            onDragEnd = {
+                                if (totalDrag > thresholdPx) onSwipeBack()
+                                totalDrag = 0f
+                            },
+                            onDragCancel = { totalDrag = 0f }
+                        )
+                    }
+            )
+        }
+        if (canGoForward) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .fillMaxHeight()
+                    .width(edgeWidth)
+                    .pointerInput(Unit) {
+                        var totalDrag = 0f
+                        detectHorizontalDragGestures(
+                            onDragStart = { totalDrag = 0f },
+                            onHorizontalDrag = { change, amount ->
+                                totalDrag += amount
+                                if (totalDrag < 0f) change.consume()
+                            },
+                            onDragEnd = {
+                                if (-totalDrag > thresholdPx) onSwipeForward()
+                                totalDrag = 0f
+                            },
+                            onDragCancel = { totalDrag = 0f }
+                        )
+                    }
+            )
+        }
     }
 }
