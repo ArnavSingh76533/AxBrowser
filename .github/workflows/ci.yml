@@ -10,9 +10,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-permissions:
-  contents: write
-
 jobs:
   build:
     name: Build & Test
@@ -44,33 +41,8 @@ jobs:
           gradle wrapper --gradle-version 8.6 --no-daemon
         fi
 
-    - name: Build Debug APK (capture log)
-      run: |
-        set +e
-        ./gradlew assembleDebug --no-daemon --stacktrace > /tmp/build_output.log 2>&1
-        echo "BUILD_EXIT_CODE=$?" >> "$GITHUB_ENV"
-        tail -c 60000 /tmp/build_output.log > build_debug_log.txt
-        exit 0
-
-    - name: Push captured build log for debugging
-      if: always()
-      run: |
-        git config user.email "ci-debug@axbrowser.local"
-        git config user.name "CI Debug Bot"
-        git fetch origin ci-debug-logs 2>/dev/null || true
-        git checkout -B ci-debug-logs
-        mkdir -p .ci-debug
-        mv build_debug_log.txt ".ci-debug/build-${{ github.sha }}.txt" 2>/dev/null || true
-        git add .ci-debug
-        git commit -m "CI debug log for ${{ github.sha }}" || echo "nothing to commit"
-        git push origin ci-debug-logs --force
-
-    - name: Fail if build actually failed
-      run: |
-        if [ "$BUILD_EXIT_CODE" != "0" ]; then
-          echo "Build failed with exit code $BUILD_EXIT_CODE"
-          exit 1
-        fi
+    - name: Build Debug APK
+      run: ./gradlew assembleDebug --no-daemon --stacktrace
 
     - name: Run Unit Tests
       run: ./gradlew testDebugUnitTest --no-daemon --stacktrace
