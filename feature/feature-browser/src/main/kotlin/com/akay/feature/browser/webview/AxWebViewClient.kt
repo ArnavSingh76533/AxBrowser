@@ -27,6 +27,19 @@ class AxWebViewClient(
 
     private val blockedDomains = mutableSetOf<String>()
 
+    // shouldInterceptRequest runs on a background thread, so WebView methods
+    // (including view.getUrl()) must never be called from it directly - doing
+    // so throws a fatal "WebView methods must be called on the same thread"
+    // RuntimeException on modern WebView builds. We track the current page's
+    // origin here instead, updated only from the UI-thread callbacks below.
+    @Volatile
+    private var currentPageOrigin: String? = null
+
+    private fun originOf(url: String?): String? =
+        if (url.isNullOrBlank()) null else runCatching {
+            java.net.URI(url).let { if (it.scheme != null && it.host != null) "${it.scheme}://${it.host}" else null }
+        }.getOrNull()
+
     private val interceptorClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
@@ -77,7 +90,7 @@ class AxWebViewClient(
             }
         }
 
-        if (adBlockerEnabled() && (AdBlockEngine.shouldBlock(url, view?.url) || isBlocked(url))) {
+        if (adBlockerEnabled() && (AdBlockEngine.shouldBlock(url, currentPageOrigin) || isBlocked(url))) {
             AdBlockEngine.onBlocked()
             NetworkInterceptor.markBlocked(url)
             return WebResourceResponse("text/plain", "UTF-8", ByteArrayInputStream("".toByteArray()))
@@ -110,11 +123,13 @@ class AxWebViewClient(
 
     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
         super.onPageStarted(view, url, favicon)
+        currentPageOrigin = originOf(url)
         url?.let { onPageStarted(it) }
     }
 
     override fun onPageFinished(view: WebView?, url: String?) {
         super.onPageFinished(view, url)
+        currentPageOrigin = originOf(url)
         onPageFinished(url ?: "", view?.title)
     }
 
