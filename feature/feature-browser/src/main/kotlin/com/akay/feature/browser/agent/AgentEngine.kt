@@ -36,21 +36,45 @@ class AgentEngine(
         - get_page_text: {} - returns the current page's visible text so you can read/summarize it
         - get_links: {} - returns visible links (text + href) on the current page, e.g. to find a specific video result
         - click_link: {"text": "substring of the link text to click"}
-        - download: {"url": "direct or page URL to send to the built-in downloader"}
+        - download: {"url": "the COMPLETE URL to send to the built-in downloader"}
         - final_answer: {"text": "your final reply to the user, plain text"}
 
-        Rules:
+        Every user message includes a line like "Current browser page: <url>" showing exactly what
+        page is open right now. Use it directly:
+        - If the user says "this video", "the current page", "what I'm watching", "download this", etc.,
+          that means the page at "Current browser page" - use that URL immediately, do NOT ask the user
+          for a link and do NOT call navigate/search first, they are already there.
+        - Only call navigate/search when the user asks to go somewhere new or find something you don't
+          already have the URL for.
+
+        Rules for the "download" action's url field specifically:
+        - It MUST always be a complete URL starting with "http://" or "https://" (e.g.
+          "https://www.youtube.com/watch?v=dQw4w9WgXcQ"), covering the whole address.
+        - NEVER pass just a bare video ID, slug, or partial path (e.g. never just "dQw4w9WgXcQ").
+        - If you are unsure of the exact URL, first use navigate/search/get_links/click_link to actually
+          land on that exact page, then read its real URL from the tool's "Current URL:" observation or
+          from the "Current browser page" line, and use that full URL - never guess or shorten it.
+
+        Other rules:
         - Always take exactly one action per turn.
         - Use get_page_text or get_links right after navigating/searching before assuming what's on the page.
-        - When asked to find and download something (e.g. a YouTube video), first search, then get_links or get_page_text to find the right result, click it if needed, then call download with that page's URL.
+        - When asked to find and download something (e.g. a YouTube video) that isn't already open, first
+          search, then get_links or get_page_text to find the right result, click it, then call download
+          with that exact page's full URL.
         - Finish with final_answer as soon as the user's request is satisfied, summarizing what you did.
-        - Never invent URLs or page contents you haven't actually observed via a tool.
+        - Never invent URLs or page contents you haven't actually observed via a tool or the context line.
     """.trimIndent()
 
     private val history = mutableListOf(ChatTurn("system", systemPrompt))
 
     suspend fun run(userGoal: String, maxSteps: Int = 6, onEvent: suspend (AgentEvent) -> Unit) {
-        history += ChatTurn("user", userGoal)
+        val currentPage = runCatching { tools.currentUrl() }.getOrDefault("")
+        val contextualGoal = if (currentPage.isNotBlank()) {
+            "Current browser page: $currentPage\n\nUser request: $userGoal"
+        } else {
+            userGoal
+        }
+        history += ChatTurn("user", contextualGoal)
         repeat(maxSteps) { step ->
             val result = client.chat(apiKey, model, history)
             val raw = result.getOrElse {

@@ -8,6 +8,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AddComment
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Send
@@ -18,63 +19,58 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.akay.core.data.ai.OpenRouterClient
 import com.akay.core.ui.theme.Primary
 import kotlinx.coroutines.launch
-
-private data class ChatBubble(
-    val text: String,
-    val isUser: Boolean,
-    val isSystemNote: Boolean = false
-)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AgentSheet(
-    onDismiss: () -> Unit,
-    openRouterClient: OpenRouterClient,
+    controller: AgentChatController,
     apiKey: String?,
     model: String,
-    tools: AgentToolExecutor,
+    onMinimize: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
-    val bubbles = remember { mutableStateListOf<ChatBubble>() }
     var input by remember { mutableStateOf("") }
-    var isRunning by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // Intercept the sheet's own hide transition (swipe-down / scrim tap) and
+    // turn it into a minimize instead of letting Compose fully tear it down -
+    // the conversation lives in `controller`, outside this composable, so
+    // nothing is lost either way, but we still want the "still active" chip
+    // to appear rather than the sheet just vanishing without a trace.
+    val sheetState = rememberModalBottomSheetState(
+        skipPartiallyExpanded = true,
+        confirmValueChange = { value ->
+            if (value == SheetValue.Hidden) {
+                onMinimize()
+                false
+            } else true
+        }
+    )
 
     fun send() {
-        val goal = input.trim()
-        if (goal.isBlank() || isRunning || apiKey.isNullOrBlank()) return
+        val goal = input
         input = ""
-        bubbles.add(ChatBubble(goal, isUser = true))
-        isRunning = true
-        scope.launch {
-            val engine = AgentEngine(openRouterClient, apiKey, model, tools)
-            engine.run(goal) { event ->
-                when (event) {
-                    is AgentEvent.Thinking -> bubbles.add(ChatBubble("\uD83D\uDCAD ${event.thought}", isUser = false, isSystemNote = true))
-                    is AgentEvent.ToolCall -> bubbles.add(ChatBubble("\u2699\uFE0F ${event.action}(${event.input})", isUser = false, isSystemNote = true))
-                    is AgentEvent.ToolResult -> bubbles.add(ChatBubble("\u2192 ${event.observation.take(300)}", isUser = false, isSystemNote = true))
-                    is AgentEvent.FinalAnswer -> bubbles.add(ChatBubble(event.text, isUser = false))
-                    is AgentEvent.Error -> bubbles.add(ChatBubble("\u26A0\uFE0F ${event.message}", isUser = false))
-                }
-                if (bubbles.isNotEmpty()) listState.animateScrollToItem(bubbles.size - 1)
+        controller.send(goal, apiKey.orEmpty(), model) {
+            scope.launch {
+                if (controller.bubbles.isNotEmpty()) listState.animateScrollToItem(controller.bubbles.size - 1)
             }
-            isRunning = false
         }
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    ModalBottomSheet(onDismissRequest = onMinimize, sheetState = sheetState) {
         Column(modifier = Modifier.fillMaxWidth().heightIn(min = 400.dp, max = 620.dp).padding(horizontal = 16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
                 Icon(Icons.Default.AutoAwesome, null, tint = Primary)
                 Spacer(Modifier.width(8.dp))
                 Text("AI Agent", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, "Close") }
+                IconButton(onClick = { controller.newChat() }, enabled = !controller.isRunning) {
+                    Icon(Icons.Default.AddComment, "New chat")
+                }
+                IconButton(onClick = onMinimize) { Icon(Icons.Default.Close, "Close") }
             }
 
             if (apiKey.isNullOrBlank()) {
@@ -88,15 +84,15 @@ fun AgentSheet(
                     Text(
                         "Add a free OpenRouter API key in Settings to use the AI agent.",
                         style = MaterialTheme.typography.bodyMedium,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        textAlign = TextAlign.Center
                     )
                     Spacer(Modifier.height(12.dp))
                     Button(onClick = onOpenSettings) { Text("Open Settings") }
                 }
             } else {
-                if (bubbles.isEmpty()) {
+                if (controller.bubbles.isEmpty()) {
                     Text(
-                        "Try: \u201COpen YouTube and search lofi hip hop, then download the first result\u201D or \u201CSummarize this page\u201D",
+                        "Try: \u201COpen YouTube and search lofi hip hop, then download the first result\u201D or \u201CDownload this video\u201D while one is open",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(bottom = 8.dp)
@@ -107,7 +103,7 @@ fun AgentSheet(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(bubbles) { bubble ->
+                    items(controller.bubbles) { bubble ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = if (bubble.isUser) Arrangement.End else Arrangement.Start
@@ -130,7 +126,7 @@ fun AgentSheet(
                             }
                         }
                     }
-                    if (isRunning) {
+                    if (controller.isRunning) {
                         item {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
@@ -148,16 +144,46 @@ fun AgentSheet(
                         modifier = Modifier.weight(1f),
                         placeholder = { Text("Ask the agent to do something\u2026") },
                         singleLine = true,
-                        enabled = !isRunning,
+                        enabled = !controller.isRunning,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                         keyboardActions = KeyboardActions(onSend = { send() })
                     )
                     Spacer(Modifier.width(8.dp))
-                    IconButton(onClick = { send() }, enabled = !isRunning && input.isNotBlank()) {
+                    IconButton(onClick = { send() }, enabled = !controller.isRunning && input.isNotBlank()) {
                         Icon(Icons.Default.Send, "Send", tint = Primary)
                     }
                 }
             }
+        }
+    }
+}
+
+/** Small floating chip shown when the agent has an active conversation but the sheet is minimized. */
+@Composable
+fun AgentMinimizedChip(isRunning: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(50),
+        color = Primary,
+        shadowElevation = 6.dp,
+        modifier = modifier
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (isRunning) {
+                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = Color.White)
+            } else {
+                Icon(Icons.Default.AutoAwesome, null, tint = Color.White, modifier = Modifier.size(16.dp))
+            }
+            Spacer(Modifier.width(8.dp))
+            Text(
+                if (isRunning) "Agent working\u2026" else "Agent chat active",
+                color = Color.White,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Medium
+            )
         }
     }
 }

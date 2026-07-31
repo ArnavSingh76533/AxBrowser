@@ -55,6 +55,7 @@ import com.akay.feature.browser.reader.ReaderMode
 import com.akay.feature.browser.gesture.EdgeSwipeOverlay
 import com.akay.feature.browser.viewmodel.BrowserViewModel
 import com.akay.feature.browser.webview.AxNetBridge
+import com.akay.feature.browser.agent.normalizeDownloadUrl
 import com.akay.feature.browser.webview.PasswordCaptureBridge
 import com.akay.feature.browser.webview.evalJs
 import com.akay.feature.browser.webview.unwrapJsString
@@ -98,7 +99,7 @@ fun BrowserScreen(
     var showPasteLinkDialog by remember { mutableStateOf(false) }
     var pasteUrl by remember { mutableStateOf("") }
     var showMenu by remember { mutableStateOf(false) }
-    var showAgentSheet by remember { mutableStateOf(false) }
+    var agentSheetVisible by remember { mutableStateOf(false) }
 
     // Fullscreen video state
     var fullscreenView by remember { mutableStateOf<View?>(null) }
@@ -296,7 +297,7 @@ fun BrowserScreen(
                         }
 
                         IconButton(
-                            onClick = { showAgentSheet = true },
+                            onClick = { agentSheetVisible = true },
                             modifier = Modifier.size(36.dp)
                         ) {
                             Icon(Icons.Default.AutoAwesome, "AI Agent", modifier = Modifier.size(20.dp), tint = Primary)
@@ -934,83 +935,95 @@ fun BrowserScreen(
         }
     }
 
-    if (showAgentSheet) {
-        val agentTools = remember(webView) {
-            object : com.akay.feature.browser.agent.AgentToolExecutor {
-                private suspend fun waitForLoad() {
-                    kotlinx.coroutines.delay(400)
-                    var waited = 0
-                    while (viewModel.uiState.value.isLoading && waited < 6000) {
-                        kotlinx.coroutines.delay(300)
-                        waited += 300
-                    }
+    val agentTools = remember(webView) {
+        object : com.akay.feature.browser.agent.AgentToolExecutor {
+            private suspend fun waitForLoad() {
+                kotlinx.coroutines.delay(400)
+                var waited = 0
+                while (viewModel.uiState.value.isLoading && waited < 6000) {
                     kotlinx.coroutines.delay(300)
+                    waited += 300
                 }
-
-                override suspend fun navigate(url: String) {
-                    val target = if (url.startsWith("http://") || url.startsWith("https://")) url else "https://$url"
-                    viewModel.navigateToUrl(target)
-                    waitForLoad()
-                }
-
-                override suspend fun searchAndOpen(engine: String, query: String) {
-                    val encoded = java.net.URLEncoder.encode(query, "UTF-8")
-                    val searchUrl = when (engine.lowercase()) {
-                        "youtube" -> "https://www.youtube.com/results?search_query=$encoded"
-                        else -> "https://www.google.com/search?q=$encoded"
-                    }
-                    viewModel.navigateToUrl(searchUrl)
-                    waitForLoad()
-                }
-
-                override suspend fun getPageText(): String {
-                    val wv = webView ?: return "No page is currently loaded."
-                    return unwrapJsString(wv.evalJs(com.akay.feature.browser.agent.AgentJs.GET_PAGE_TEXT))
-                }
-
-                override suspend fun getPageLinks(): List<com.akay.feature.browser.agent.AgentLink> {
-                    val wv = webView ?: return emptyList()
-                    val raw = unwrapJsString(wv.evalJs(com.akay.feature.browser.agent.AgentJs.GET_LINKS))
-                    return runCatching {
-                        val arr = org.json.JSONArray(raw)
-                        (0 until arr.length()).map {
-                            val o = arr.getJSONObject(it)
-                            com.akay.feature.browser.agent.AgentLink(o.optString("text"), o.optString("href"))
-                        }
-                    }.getOrDefault(emptyList())
-                }
-
-                override suspend fun clickLinkContaining(text: String): Boolean {
-                    val wv = webView ?: return false
-                    val clicked = unwrapJsString(wv.evalJs(com.akay.feature.browser.agent.AgentJs.clickLinkContaining(text))) == "true"
-                    if (clicked) waitForLoad()
-                    return clicked
-                }
-
-                override suspend fun startDownload(url: String): String {
-                    if (url.isBlank()) return "No URL was provided to download."
-                    downloadViewModel.enqueueWithQualityPicker(url)
-                    return "Started a download for $url \u2014 check the Downloads screen for progress."
-                }
-
-                override suspend fun currentUrl(): String = webView?.url ?: viewModel.uiState.value.displayUrl
+                kotlinx.coroutines.delay(300)
             }
-        }
 
+            override suspend fun navigate(url: String) {
+                val target = if (url.startsWith("http://") || url.startsWith("https://")) url else "https://$url"
+                viewModel.navigateToUrl(target)
+                waitForLoad()
+            }
+
+            override suspend fun searchAndOpen(engine: String, query: String) {
+                val encoded = java.net.URLEncoder.encode(query, "UTF-8")
+                val searchUrl = when (engine.lowercase()) {
+                    "youtube" -> "https://www.youtube.com/results?search_query=$encoded"
+                    else -> "https://www.google.com/search?q=$encoded"
+                }
+                viewModel.navigateToUrl(searchUrl)
+                waitForLoad()
+            }
+
+            override suspend fun getPageText(): String {
+                val wv = webView ?: return "No page is currently loaded."
+                return unwrapJsString(wv.evalJs(com.akay.feature.browser.agent.AgentJs.GET_PAGE_TEXT))
+            }
+
+            override suspend fun getPageLinks(): List<com.akay.feature.browser.agent.AgentLink> {
+                val wv = webView ?: return emptyList()
+                val raw = unwrapJsString(wv.evalJs(com.akay.feature.browser.agent.AgentJs.GET_LINKS))
+                return runCatching {
+                    val arr = org.json.JSONArray(raw)
+                    (0 until arr.length()).map {
+                        val o = arr.getJSONObject(it)
+                        com.akay.feature.browser.agent.AgentLink(o.optString("text"), o.optString("href"))
+                    }
+                }.getOrDefault(emptyList())
+            }
+
+            override suspend fun clickLinkContaining(text: String): Boolean {
+                val wv = webView ?: return false
+                val clicked = unwrapJsString(wv.evalJs(com.akay.feature.browser.agent.AgentJs.clickLinkContaining(text))) == "true"
+                if (clicked) waitForLoad()
+                return clicked
+            }
+
+            override suspend fun startDownload(url: String): String {
+                val normalized = normalizeDownloadUrl(url, webView?.url ?: viewModel.uiState.value.displayUrl)
+                if (normalized.isBlank()) return "No URL was provided to download and no page is currently open."
+                downloadViewModel.enqueueWithQualityPicker(normalized)
+                return "Started a download for $normalized \u2014 check the Downloads screen for progress."
+            }
+
+            override suspend fun currentUrl(): String = webView?.url ?: viewModel.uiState.value.displayUrl
+        }
+    }
+
+    val agentScope = rememberCoroutineScope()
+    val agentController = remember {
+        com.akay.feature.browser.agent.AgentChatController(agentScope, viewModel.openRouterClient, agentTools)
+    }
+
+    if (agentSheetVisible) {
         val aiApiKey by viewModel.aiApiKey.collectAsState()
         val aiModel by viewModel.aiModel.collectAsState()
 
         com.akay.feature.browser.agent.AgentSheet(
-            onDismiss = { showAgentSheet = false },
-            openRouterClient = viewModel.openRouterClient,
+            controller = agentController,
             apiKey = aiApiKey,
             model = aiModel,
-            tools = agentTools,
+            onMinimize = { agentSheetVisible = false },
             onOpenSettings = {
-                showAgentSheet = false
+                agentSheetVisible = false
                 onOpenSettings()
             }
         )
+    } else if (agentController.hasSession) {
+        Box(modifier = Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.BottomStart) {
+            com.akay.feature.browser.agent.AgentMinimizedChip(
+                isRunning = agentController.isRunning,
+                onClick = { agentSheetVisible = true }
+            )
+        }
     }
 }
 
