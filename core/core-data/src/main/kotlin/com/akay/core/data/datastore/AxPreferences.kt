@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.akay.core.data.security.CryptoManager
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -18,7 +19,8 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
 
 @Singleton
 class AxPreferences @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val cryptoManager: CryptoManager
 ) {
     private object Keys {
         val SEARCH_ENGINE = stringPreferencesKey("search_engine")
@@ -47,6 +49,8 @@ class AxPreferences @Inject constructor(
         val WIFI_ONLY_DOWNLOADS = booleanPreferencesKey("wifi_only_downloads")
         val BATTERY_SAVER_ENABLED = booleanPreferencesKey("battery_saver_enabled")
         val THEME_PRESET = stringPreferencesKey("theme_preset")
+        val OPENROUTER_API_KEY_ENC = stringPreferencesKey("openrouter_api_key_enc")
+        val AI_MODEL = stringPreferencesKey("ai_model")
     }
 
     val searchEngine: Flow<String> = context.dataStore.data.map { it[Keys.SEARCH_ENGINE] ?: "https://www.google.com/search?q=" }
@@ -75,6 +79,10 @@ class AxPreferences @Inject constructor(
     val wifiOnlyDownloads: Flow<Boolean> = context.dataStore.data.map { it[Keys.WIFI_ONLY_DOWNLOADS] ?: false }
     val batterySaverEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.BATTERY_SAVER_ENABLED] ?: false }
     val themePreset: Flow<String> = context.dataStore.data.map { it[Keys.THEME_PRESET] ?: "Nebula" }
+    val openRouterApiKey: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[Keys.OPENROUTER_API_KEY_ENC]?.let { enc -> runCatching { cryptoManager.decrypt(enc) }.getOrNull() }
+    }
+    val aiModel: Flow<String> = context.dataStore.data.map { it[Keys.AI_MODEL] ?: "meta-llama/llama-3.1-8b-instruct:free" }
 
     suspend fun setSearchEngine(url: String) { context.dataStore.edit { it[Keys.SEARCH_ENGINE] = url } }
     suspend fun setHomepage(url: String) { context.dataStore.edit { it[Keys.HOMEPAGE] = url } }
@@ -106,4 +114,11 @@ class AxPreferences @Inject constructor(
     suspend fun setWifiOnlyDownloads(enabled: Boolean) { context.dataStore.edit { it[Keys.WIFI_ONLY_DOWNLOADS] = enabled } }
     suspend fun setBatterySaverEnabled(enabled: Boolean) { context.dataStore.edit { it[Keys.BATTERY_SAVER_ENABLED] = enabled } }
     suspend fun setThemePreset(name: String) { context.dataStore.edit { it[Keys.THEME_PRESET] = name } }
+    suspend fun setOpenRouterApiKey(key: String?) {
+        context.dataStore.edit {
+            if (key.isNullOrBlank()) it.remove(Keys.OPENROUTER_API_KEY_ENC)
+            else it[Keys.OPENROUTER_API_KEY_ENC] = cryptoManager.encrypt(key)
+        }
+    }
+    suspend fun setAiModel(modelId: String) { context.dataStore.edit { it[Keys.AI_MODEL] = modelId } }
 }

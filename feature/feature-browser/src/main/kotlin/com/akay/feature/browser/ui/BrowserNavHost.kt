@@ -115,7 +115,10 @@ fun BrowserNavHost() {
             }
         ) {
             composable(NavRoute.Browser.route) {
-                BrowserScreen(downloadViewModel = downloadViewModel)
+                BrowserScreen(
+                    downloadViewModel = downloadViewModel,
+                    onOpenSettings = { navController.navigate(NavRoute.Settings.route) }
+                )
             }
             composable(NavRoute.Downloads.route) {
                 DownloadManagerScreen(

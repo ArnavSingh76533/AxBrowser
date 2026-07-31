@@ -14,9 +14,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
@@ -26,6 +29,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -357,6 +361,117 @@ fun SettingsScreen(
                     TextButton(onClick = { viewModel.updateYtDlp() }) {
                         Text("Update")
                     }
+                }
+            }
+
+            SettingsSection(title = "AI Agent") {
+                var showApiKeyDialog by remember { mutableStateOf(false) }
+                var showModelDialog by remember { mutableStateOf(false) }
+                var apiKeyInput by remember { mutableStateOf("") }
+
+                SettingsNavigationItem(
+                    title = "OpenRouter API key",
+                    subtitle = if (uiState.aiApiKeySet) "Key saved \u2022 tap to change" else "Add a free OpenRouter API key to enable the AI agent",
+                    onClick = { apiKeyInput = ""; showApiKeyDialog = true }
+                )
+                SettingsNavigationItem(
+                    title = "AI model",
+                    subtitle = uiState.aiModel,
+                    onClick = {
+                        showModelDialog = true
+                        if (uiState.aiFreeModels.isEmpty()) viewModel.refreshFreeModels()
+                    }
+                )
+
+                if (showApiKeyDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showApiKeyDialog = false },
+                        title = { Text("OpenRouter API key") },
+                        text = {
+                            Column {
+                                Text(
+                                    "Get a free key at openrouter.ai \u2192 Keys. AxBrowser only uses OpenRouter's free-tier models.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                OutlinedTextField(
+                                    value = apiKeyInput,
+                                    onValueChange = { apiKeyInput = it },
+                                    label = { Text("sk-or-v1-...") },
+                                    singleLine = true,
+                                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation()
+                                )
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(
+                                enabled = apiKeyInput.isNotBlank(),
+                                onClick = {
+                                    viewModel.setAiApiKey(apiKeyInput.trim())
+                                    showApiKeyDialog = false
+                                }
+                            ) { Text("Save") }
+                        },
+                        dismissButton = {
+                            Row {
+                                if (uiState.aiApiKeySet) {
+                                    TextButton(onClick = {
+                                        viewModel.clearAiApiKey()
+                                        showApiKeyDialog = false
+                                    }) { Text("Remove key", color = MaterialTheme.colorScheme.error) }
+                                }
+                                TextButton(onClick = { showApiKeyDialog = false }) { Text("Cancel") }
+                            }
+                        }
+                    )
+                }
+
+                if (showModelDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showModelDialog = false },
+                        title = { Text("Choose a free model") },
+                        text = {
+                            Column {
+                                when {
+                                    uiState.aiModelsLoading -> {
+                                        Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                                            CircularProgressIndicator()
+                                        }
+                                    }
+                                    uiState.aiModelsError != null -> {
+                                        Text(uiState.aiModelsError ?: "", color = MaterialTheme.colorScheme.error)
+                                        TextButton(onClick = { viewModel.refreshFreeModels() }) { Text("Retry") }
+                                    }
+                                    else -> {
+                                        LazyColumn(modifier = Modifier.heightIn(max = 400.dp)) {
+                                            items(uiState.aiFreeModels) { model ->
+                                                TextButton(
+                                                    onClick = {
+                                                        viewModel.setAiModel(model.id)
+                                                        showModelDialog = false
+                                                    },
+                                                    modifier = Modifier.fillMaxWidth()
+                                                ) {
+                                                    Column(modifier = Modifier.fillMaxWidth()) {
+                                                        Text(model.name, style = MaterialTheme.typography.bodyMedium)
+                                                        Text(
+                                                            model.id,
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = { showModelDialog = false }) { Text("Close") }
+                        }
+                    )
                 }
             }
 

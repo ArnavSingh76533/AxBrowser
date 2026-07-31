@@ -2,6 +2,7 @@ package com.akay.feature.browser.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.akay.core.data.ai.OpenRouterClient
 import com.akay.core.data.datastore.AxPreferences
 import com.akay.feature.browser.adblock.AdBlockEngine
 import com.akay.core.domain.model.Bookmark
@@ -71,7 +72,8 @@ class BrowserViewModel @Inject constructor(
     private val preferences: AxPreferences,
     private val suggestionProvider: SearchSuggestionProvider,
     private val adBlockRepository: AdBlockRepository,
-    private val passwordRepository: PasswordRepository
+    private val passwordRepository: PasswordRepository,
+    val openRouterClient: OpenRouterClient
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(BrowserUiState())
@@ -213,6 +215,11 @@ class BrowserViewModel @Inject constructor(
             _fillableCredential.value = passwordRepository.getForOrigin(origin).firstOrNull()
         }
     }
+
+    val aiApiKey: StateFlow<String?> = preferences.openRouterApiKey
+        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, null)
+    val aiModel: StateFlow<String> = preferences.aiModel
+        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, "meta-llama/llama-3.1-8b-instruct:free")
 
     fun clearFillableCredential() {
         _fillableCredential.value = null

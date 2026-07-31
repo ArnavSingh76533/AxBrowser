@@ -5,6 +5,8 @@ import android.webkit.CookieManager
 import android.webkit.WebStorage
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.akay.core.data.ai.OpenRouterClient
+import com.akay.core.data.ai.OpenRouterModel
 import com.akay.core.data.datastore.AxPreferences
 import com.akay.core.data.userscript.UserScript
 import com.akay.core.data.userscript.UserScriptCodec
@@ -17,6 +19,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
@@ -55,7 +58,12 @@ data class SettingsUiState(
     val appLockUseBiometric: Boolean = true,
     val wifiOnlyDownloads: Boolean = false,
     val batterySaverEnabled: Boolean = false,
-    val themePreset: String = "Nebula"
+    val themePreset: String = "Nebula",
+    val aiApiKeySet: Boolean = false,
+    val aiModel: String = "meta-llama/llama-3.1-8b-instruct:free",
+    val aiFreeModels: List<OpenRouterModel> = emptyList(),
+    val aiModelsLoading: Boolean = false,
+    val aiModelsError: String? = null
 ) {
     val searchEngineName: String
         get() = SEARCH_ENGINES.firstOrNull { it.url == searchEngineUrl }?.name ?: "Custom"
@@ -65,6 +73,7 @@ data class SettingsUiState(
 class SettingsViewModel @Inject constructor(
     private val preferences: AxPreferences,
     private val historyRepository: HistoryRepository,
+    private val openRouterClient: OpenRouterClient,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -183,6 +192,12 @@ class SettingsViewModel @Inject constructor(
             preferences.themePreset.collect { _uiState.value = _uiState.value.copy(themePreset = it) }
         }
         viewModelScope.launch {
+            preferences.openRouterApiKey.collect { _uiState.value = _uiState.value.copy(aiApiKeySet = !it.isNullOrBlank()) }
+        }
+        viewModelScope.launch {
+            preferences.aiModel.collect { _uiState.value = _uiState.value.copy(aiModel = it) }
+        }
+        viewModelScope.launch {
             preferences.animationIntensity.collect { _uiState.value = _uiState.value.copy(animationIntensity = it) }
         }
         viewModelScope.launch {
@@ -216,6 +231,30 @@ class SettingsViewModel @Inject constructor(
     fun setWifiOnlyDownloads(enabled: Boolean) { viewModelScope.launch { preferences.setWifiOnlyDownloads(enabled) } }
     fun setBatterySaverEnabled(enabled: Boolean) { viewModelScope.launch { preferences.setBatterySaverEnabled(enabled) } }
     fun setThemePreset(name: String) { viewModelScope.launch { preferences.setThemePreset(name) } }
+
+    fun setAiApiKey(key: String) {
+        viewModelScope.launch { preferences.setOpenRouterApiKey(key) }
+    }
+
+    fun clearAiApiKey() {
+        viewModelScope.launch { preferences.setOpenRouterApiKey(null) }
+    }
+
+    fun setAiModel(modelId: String) {
+        viewModelScope.launch { preferences.setAiModel(modelId) }
+    }
+
+    fun refreshFreeModels() {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(aiModelsLoading = true, aiModelsError = null)
+            val key = preferences.openRouterApiKey.first()
+            val result = openRouterClient.fetchFreeModels(key)
+            _uiState.value = result.fold(
+                onSuccess = { models -> _uiState.value.copy(aiModelsLoading = false, aiFreeModels = models) },
+                onFailure = { e -> _uiState.value.copy(aiModelsLoading = false, aiModelsError = e.message ?: "Failed to load models") }
+            )
+        }
+    }
     fun setHttpsUpgrade(enabled: Boolean) { viewModelScope.launch { preferences.setHttpsUpgrade(enabled) } }
     fun setJavascriptEnabled(enabled: Boolean) { viewModelScope.launch { preferences.setJavascriptEnabled(enabled) } }
     fun setDesktopMode(enabled: Boolean) { viewModelScope.launch { preferences.setDesktopMode(enabled) } }
