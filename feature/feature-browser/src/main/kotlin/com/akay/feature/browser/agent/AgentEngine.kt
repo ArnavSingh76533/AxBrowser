@@ -26,16 +26,31 @@ class AgentEngine(
     private val tools: AgentToolExecutor
 ) {
     private val systemPrompt = """
-        You are AxBrowser's in-app AI agent. You control a real mobile web browser for the user.
+        You are AxBrowser's in-app AI agent. You control a real mobile web browser for the user,
+        including its dev-console network log, page scraping, and raw JS execution.
         On every turn you must reply with ONLY a single JSON object (no markdown fences, no prose outside it) shaped like:
-        {"thought": "brief reasoning", "action": "<one of: navigate, search, get_page_text, get_links, click_link, download, final_answer>", "action_input": { ... }}
+        {"thought": "brief reasoning", "action": "<action name>", "action_input": { ... }}
 
         Actions:
         - navigate: {"url": "https://..."}
         - search: {"engine": "youtube" | "google", "query": "..."}
-        - get_page_text: {} - returns the current page's visible text so you can read/summarize it
-        - get_links: {} - returns visible links (text + href) on the current page, e.g. to find a specific video result
+        - go_back: {} - browser back button
+        - go_forward: {} - browser forward button
+        - get_page_text: {} - the current page's visible text, for reading/summarizing
+        - get_links: {} - visible links (text + href) on the current page
         - click_link: {"text": "substring of the link text to click"}
+        - scrape: {"selector": "CSS selector", "attribute": "optional attribute name, e.g. href/src - omit for text content"}
+          - a more precise, structured alternative to get_links/get_page_text, e.g. {"selector": "h1.title"} or
+            {"selector": "video source", "attribute": "src"}
+        - run_js: {"code": "JS statements, e.g. return document.title;"} - last resort for anything the other
+          tools can't do (reading obscure DOM state, computed values, etc). The code runs inside a function body.
+        - get_network_requests: {"filter": "optional substring to match in the URL, e.g. 'm3u8' or 'api/video'"}
+          - lists requests the page has actually made (method, url, status, mime type, size) - like the dev console's
+            network tab. Use this to find real media/API URLs that aren't visible in the page's HTML.
+        - get_detected_media: {} - direct video/audio URLs already detected on the page (from network responses and
+          <video>/<source>/<audio> tags). Often a better download target than the page URL itself, especially for
+          sites that stream from a different domain than the page.
+        - list_tabs: {} - titles + URLs of all open browser tabs
         - download: {"url": "the COMPLETE URL to send to the built-in downloader"}
         - final_answer: {"text": "your final reply to the user, plain text"}
 
@@ -54,20 +69,24 @@ class AgentEngine(
         - If you are unsure of the exact URL, first use navigate/search/get_links/click_link to actually
           land on that exact page, then read its real URL from the tool's "Current URL:" observation or
           from the "Current browser page" line, and use that full URL - never guess or shorten it.
+        - If a normal page URL might not be directly downloadable (e.g. a page that streams from elsewhere),
+          try get_detected_media or get_network_requests first to find the actual media file URL.
 
         Other rules:
         - Always take exactly one action per turn.
-        - Use get_page_text or get_links right after navigating/searching before assuming what's on the page.
+        - Use get_page_text, get_links, or scrape right after navigating/searching before assuming what's on the page.
         - When asked to find and download something (e.g. a YouTube video) that isn't already open, first
-          search, then get_links or get_page_text to find the right result, click it, then call download
-          with that exact page's full URL.
+          search, then get_links/scrape to find the right result, click it, then call download with that
+          exact page's full URL (or the URL from get_detected_media if the page itself isn't a direct file).
+        - Prefer scrape over get_links/get_page_text when you need precise, structured data (e.g. a specific
+          attribute), and reach for run_js only when nothing else can get what you need.
         - Finish with final_answer as soon as the user's request is satisfied, summarizing what you did.
         - Never invent URLs or page contents you haven't actually observed via a tool or the context line.
     """.trimIndent()
 
     private val history = mutableListOf(ChatTurn("system", systemPrompt))
 
-    suspend fun run(userGoal: String, maxSteps: Int = 6, onEvent: suspend (AgentEvent) -> Unit) {
+    suspend fun run(userGoal: String, maxSteps: Int = 9, onEvent: suspend (AgentEvent) -> Unit) {
         val currentPage = runCatching { tools.currentUrl() }.getOrDefault("")
         val contextualGoal = if (currentPage.isNotBlank()) {
             "Current browser page: $currentPage\n\nUser request: $userGoal"
@@ -131,6 +150,37 @@ class AgentEngine(
             val clicked = tools.clickLinkContaining(text)
             if (clicked) "Clicked link containing \"$text\". Current URL: ${tools.currentUrl()}"
             else "No link containing \"$text\" was found."
+        }
+        "go_back" -> {
+            val moved = tools.goBack()
+            if (moved) "Went back. Current URL: ${tools.currentUrl()}" else "Can't go back further."
+        }
+        "go_forward" -> {
+            val moved = tools.goForward()
+            if (moved) "Went forward. Current URL: ${tools.currentUrl()}" else "Can't go forward further."
+        }
+        "scrape" -> {
+            val selector = input.optString("selector")
+            val attribute = input.optString("attribute").ifBlank { null }
+            val results = tools.scrape(selector, attribute)
+            if (results.isEmpty()) "No elements matched selector \"$selector\"."
+            else results.joinToString("\n") { "- $it" }
+        }
+        "run_js" -> tools.runJs(input.optString("code")).take(4000)
+        "get_network_requests" -> {
+            val filter = input.optString("filter").ifBlank { null }
+            val results = tools.getNetworkRequests(filter)
+            if (results.isEmpty()) "No matching network requests captured yet."
+            else results.joinToString("\n") { "- $it" }
+        }
+        "get_detected_media" -> {
+            val results = tools.getDetectedMedia()
+            if (results.isEmpty()) "No direct media URLs detected on this page yet."
+            else results.joinToString("\n") { "- $it" }
+        }
+        "list_tabs" -> {
+            val tabs = tools.listTabs()
+            if (tabs.isEmpty()) "No open tabs." else tabs.joinToString("\n") { "- $it" }
         }
         "download" -> tools.startDownload(input.optString("url").ifBlank { tools.currentUrl() })
         else -> "Unknown action \"$action\"."

@@ -995,6 +995,58 @@ fun BrowserScreen(
             }
 
             override suspend fun currentUrl(): String = webView?.url ?: viewModel.uiState.value.displayUrl
+
+            override suspend fun goBack(): Boolean {
+                val wv = webView ?: return false
+                if (!wv.canGoBack()) return false
+                wv.goBack()
+                waitForLoad()
+                return true
+            }
+
+            override suspend fun goForward(): Boolean {
+                val wv = webView ?: return false
+                if (!wv.canGoForward()) return false
+                wv.goForward()
+                waitForLoad()
+                return true
+            }
+
+            override suspend fun scrape(selector: String, attribute: String?): List<String> {
+                val wv = webView ?: return emptyList()
+                if (selector.isBlank()) return emptyList()
+                val raw = unwrapJsString(wv.evalJs(com.akay.feature.browser.agent.AgentJs.scrape(selector, attribute)))
+                return runCatching {
+                    val arr = org.json.JSONArray(raw)
+                    (0 until arr.length()).map { arr.optString(it) }
+                }.getOrDefault(emptyList())
+            }
+
+            override suspend fun runJs(code: String): String {
+                val wv = webView ?: return "No page is currently loaded."
+                if (code.isBlank()) return "No code provided."
+                return unwrapJsString(wv.evalJs(com.akay.feature.browser.agent.AgentJs.runJs(code)))
+            }
+
+            override suspend fun getNetworkRequests(filter: String?): List<String> {
+                val all = com.akay.feature.browser.devconsole.NetworkInterceptor.requests.value
+                val matched = if (filter.isNullOrBlank()) all else all.filter { it.url.contains(filter, ignoreCase = true) }
+                return matched.takeLast(30).map { req ->
+                    "${req.method} ${req.url} \u2192 ${req.responseStatus ?: "?"} ${req.mimeType ?: ""} ${if (req.sizeBytes > 0) "${req.sizeBytes / 1024}KB" else ""}".trim()
+                }
+            }
+
+            override suspend fun getDetectedMedia(): List<String> {
+                return com.akay.feature.browser.devconsole.NetworkInterceptor.detectedMedia.value.map { media ->
+                    "${if (media.isVideo) "video" else "audio"}: ${media.filename} \u2192 ${media.url}"
+                }
+            }
+
+            override suspend fun listTabs(): List<String> {
+                return viewModel.uiState.value.tabs.map { tab ->
+                    "${tab.title.ifBlank { "New tab" }} \u2192 ${tab.url}${if (tab.id == viewModel.uiState.value.activeTab?.id) " (active)" else ""}"
+                }
+            }
         }
     }
 

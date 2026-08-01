@@ -34,4 +34,50 @@ object AgentJs {
             })();
         """.trimIndent()
     }
+
+    /** CSS-selector scrape. Returns JSON array of strings: text content, or the given attribute if [attribute] is non-null. */
+    fun scrape(selector: String, attribute: String?): String {
+        val escapedSelector = selector.replace("\\", "\\\\").replace("'", "\\'")
+        val attrExpr = if (attribute.isNullOrBlank()) {
+            "(el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ')"
+        } else {
+            val escapedAttr = attribute.replace("\\", "\\\\").replace("'", "\\'")
+            "(el.getAttribute('$escapedAttr') || '')"
+        }
+        return """
+            (function() {
+                try {
+                    var els = Array.prototype.slice.call(document.querySelectorAll('$escapedSelector'));
+                    var out = [];
+                    for (var i = 0; i < els.length && out.length < 50; i++) {
+                        var el = els[i];
+                        var val = $attrExpr;
+                        if (val) out.push(String(val).slice(0, 200));
+                    }
+                    return JSON.stringify(out);
+                } catch (e) {
+                    return JSON.stringify(['Error: ' + e]);
+                }
+            })();
+        """.trimIndent()
+    }
+
+    /** Runs an arbitrary JS expression/statement block and stringifies whatever it evaluates to. */
+    fun runJs(code: String): String {
+        // The code is executed as-is inside a function body so both bare
+        // expressions ("document.title") and multi-statement snippets with
+        // an explicit return work.
+        return """
+            (function() {
+                try {
+                    var __result = (function() { $code })();
+                    if (__result === undefined) return 'undefined';
+                    if (typeof __result === 'object') return JSON.stringify(__result).slice(0, 4000);
+                    return String(__result).slice(0, 4000);
+                } catch (e) {
+                    return 'JS Error: ' + e;
+                }
+            })();
+        """.trimIndent()
+    }
 }

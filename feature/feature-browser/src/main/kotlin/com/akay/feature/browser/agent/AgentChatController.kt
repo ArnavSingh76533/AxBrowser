@@ -8,11 +8,22 @@ import com.akay.core.data.ai.OpenRouterClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
-data class AgentChatBubble(
-    val text: String,
-    val isUser: Boolean,
-    val isSystemNote: Boolean = false
-)
+enum class StepKind { THOUGHT, TOOL_CALL, TOOL_RESULT }
+
+data class AgentStep(val kind: StepKind, val text: String)
+
+/**
+ * One user request and everything the agent did to answer it. The
+ * step-by-step reasoning/tool trace lives in [steps] and is rendered behind
+ * a collapsed-by-default "Thinking" panel; [finalText] is the one line that
+ * always shows, like ChatGPT/Gemini's summary-vs-detail split.
+ */
+class AgentTurn(val userMessage: String) {
+    val steps = mutableStateListOf<AgentStep>()
+    var finalText by mutableStateOf<String?>(null)
+    var isError by mutableStateOf(false)
+    var isRunning by mutableStateOf(true)
+}
 
 /**
  * Owns the agent conversation independently of whether the chat sheet is
@@ -25,7 +36,7 @@ class AgentChatController(
     private val openRouterClient: OpenRouterClient,
     private val tools: AgentToolExecutor
 ) {
-    val bubbles = mutableStateListOf<AgentChatBubble>()
+    val turns = mutableStateListOf<AgentTurn>()
 
     var isRunning by mutableStateOf(false)
         private set
@@ -39,29 +50,37 @@ class AgentChatController(
         val trimmed = goal.trim()
         if (trimmed.isBlank() || isRunning || apiKey.isBlank()) return
         hasSession = true
-        bubbles.add(AgentChatBubble(trimmed, isUser = true))
+        val turn = AgentTurn(trimmed)
+        turns.add(turn)
         isRunning = true
         onUpdated()
         scope.launch {
             val activeEngine = engine ?: AgentEngine(openRouterClient, apiKey, model, tools).also { engine = it }
             activeEngine.run(trimmed) { event ->
-                val bubble = when (event) {
-                    is AgentEvent.Thinking -> AgentChatBubble("\uD83D\uDCAD ${event.thought}", isUser = false, isSystemNote = true)
-                    is AgentEvent.ToolCall -> AgentChatBubble("\u2699\uFE0F ${event.action}(${event.input})", isUser = false, isSystemNote = true)
-                    is AgentEvent.ToolResult -> AgentChatBubble("\u2192 ${event.observation.take(300)}", isUser = false, isSystemNote = true)
-                    is AgentEvent.FinalAnswer -> AgentChatBubble(event.text, isUser = false)
-                    is AgentEvent.Error -> AgentChatBubble("\u26A0\uFE0F ${event.message}", isUser = false)
+                when (event) {
+                    is AgentEvent.Thinking -> turn.steps.add(AgentStep(StepKind.THOUGHT, event.thought))
+                    is AgentEvent.ToolCall -> turn.steps.add(AgentStep(StepKind.TOOL_CALL, "${event.action}(${event.input})"))
+                    is AgentEvent.ToolResult -> turn.steps.add(AgentStep(StepKind.TOOL_RESULT, event.observation.take(400)))
+                    is AgentEvent.FinalAnswer -> turn.finalText = event.text
+                    is AgentEvent.Error -> {
+                        turn.finalText = event.message
+                        turn.isError = true
+                    }
                 }
-                bubbles.add(bubble)
                 onUpdated()
             }
+            if (turn.finalText == null) {
+                turn.finalText = "Stopped without a final answer."
+                turn.isError = true
+            }
+            turn.isRunning = false
             isRunning = false
             onUpdated()
         }
     }
 
     fun newChat() {
-        bubbles.clear()
+        turns.clear()
         engine = null
         hasSession = false
     }
