@@ -8,6 +8,7 @@ import com.akay.core.data.db.dao.FilterListDao
 import com.akay.core.data.db.dao.HistoryDao
 import com.akay.core.data.db.dao.PasswordDao
 import com.akay.core.data.db.dao.PermissionDao
+import com.akay.core.data.db.dao.ProxyDao
 import com.akay.core.data.db.dao.TabDao
 import com.akay.core.data.db.entity.BlockedDomainEntity
 import com.akay.core.data.db.entity.BookmarkEntity
@@ -15,6 +16,7 @@ import com.akay.core.data.db.entity.BookmarkFolderEntity
 import com.akay.core.data.db.entity.DownloadEntity
 import com.akay.core.data.db.entity.HistoryEntity
 import com.akay.core.data.db.entity.PasswordEntity
+import com.akay.core.data.db.entity.ProxyEntity
 import com.akay.core.data.db.entity.SitePermissionEntity
 import com.akay.core.data.db.entity.TabEntity
 
@@ -27,9 +29,10 @@ import com.akay.core.data.db.entity.TabEntity
         DownloadEntity::class,
         BlockedDomainEntity::class,
         SitePermissionEntity::class,
-        PasswordEntity::class
+        PasswordEntity::class,
+        ProxyEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = true
 )
 abstract class AxDatabase : RoomDatabase() {
@@ -40,4 +43,5 @@ abstract class AxDatabase : RoomDatabase() {
     abstract fun filterListDao(): FilterListDao
     abstract fun permissionDao(): PermissionDao
     abstract fun passwordDao(): PasswordDao
+    abstract fun proxyDao(): ProxyDao
 }

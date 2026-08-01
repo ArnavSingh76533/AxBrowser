@@ -5,18 +5,23 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
 import android.util.Log
+import com.akay.feature.browser.proxy.ProxyManager
 import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLException
 import dagger.hilt.android.HiltAndroidApp
+import javax.inject.Inject
 
 @HiltAndroidApp
 class AxBrowserApp : Application() {
+
+    @Inject lateinit var proxyManager: ProxyManager
 
     override fun onCreate() {
         super.onCreate()
         initYoutubeDL()
         createNotificationChannels()
+        proxyManager.start()
     }
 
     private fun initYoutubeDL() {

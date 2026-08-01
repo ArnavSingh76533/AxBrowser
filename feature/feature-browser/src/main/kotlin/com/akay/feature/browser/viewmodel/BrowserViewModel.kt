@@ -73,7 +73,8 @@ class BrowserViewModel @Inject constructor(
     private val suggestionProvider: SearchSuggestionProvider,
     private val adBlockRepository: AdBlockRepository,
     private val passwordRepository: PasswordRepository,
-    val openRouterClient: OpenRouterClient
+    val openRouterClient: OpenRouterClient,
+    private val proxyManager: com.akay.feature.browser.proxy.ProxyManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(BrowserUiState())
@@ -158,6 +159,7 @@ class BrowserViewModel @Inject constructor(
                 AdBlockEngine.setAllowlistedOrigins(origins.toHashSet())
             }
         }
+        observeFingerprintSettings()
     }
 
     private fun currentOrigin(): String? =
@@ -220,6 +222,33 @@ class BrowserViewModel @Inject constructor(
         .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, null)
     val aiModel: StateFlow<String> = preferences.aiModel
         .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, "meta-llama/llama-3.1-8b-instruct:free")
+
+    // ---- Device fingerprint spoofing ----
+    private val _fingerprintScript = MutableStateFlow<String?>(null)
+    val fingerprintScript: StateFlow<String?> = _fingerprintScript.asStateFlow()
+
+    private fun observeFingerprintSettings() {
+        viewModelScope.launch {
+            val fallbackSeed = preferences.getOrCreateFingerprintSeed()
+            kotlinx.coroutines.flow.combine(
+                preferences.fingerprintProtectionEnabled,
+                preferences.fingerprintSpoofCanvas,
+                preferences.fingerprintSpoofWebGl,
+                preferences.fingerprintSpoofHardware,
+                preferences.fingerprintDeviceSeed
+            ) { enabled, spoofCanvas, spoofWebGl, spoofHardware, seed ->
+                if (!enabled) {
+                    null
+                } else {
+                    com.akay.feature.browser.fingerprint.FingerprintSpoofing.buildScript(
+                        seed.ifBlank { fallbackSeed }, spoofCanvas, spoofWebGl, spoofHardware
+                    )
+                }
+            }.collect { script ->
+                _fingerprintScript.value = script
+            }
+        }
+    }
 
     fun clearFillableCredential() {
         _fillableCredential.value = null
@@ -372,6 +401,7 @@ class BrowserViewModel @Inject constructor(
             else -> "$searchEngineUrl${URLEncoder.encode(url, "UTF-8")}"
         }
         _uiState.value = _uiState.value.copy(url = processedUrl, displayUrl = processedUrl)
+        proxyManager.onNavigation()
         viewModelScope.launch {
             _uiState.value.activeTab?.let { tab ->
                 tabRepository.updateTab(tab.copy(url = processedUrl, lastAccessed = System.currentTimeMillis()))

@@ -31,6 +31,7 @@ dependencies {
     implementation(libs.lifecycle.viewmodel.compose)
     implementation(libs.coroutines.android)
     implementation(libs.okhttp)
+    implementation(libs.webkit)
 
     testImplementation(libs.junit5.api)
     testRuntimeOnly(libs.junit5.engine)

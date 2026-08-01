@@ -119,6 +119,9 @@ fun BrowserScreen(
     val networkMedia by NetworkInterceptor.detectedMedia.collectAsState()
     val blockedCount by AdBlockEngine.blockedCount.collectAsState()
     val suggestions by viewModel.suggestions.collectAsState()
+    val fingerprintScript by viewModel.fingerprintScript.collectAsState()
+    var appliedFingerprintScript by remember { mutableStateOf<String?>(null) }
+    var fingerprintScriptHandler by remember { mutableStateOf<androidx.webkit.ScriptHandler?>(null) }
 
     // Preferences
     val erudaEnabled by viewModel.erudaEnabled.collectAsState(initial = false)
@@ -673,6 +676,20 @@ fun BrowserScreen(
                         wv.settings.javaScriptEnabled = jsEnabled
                         if (wv.settings.textZoom != fontSize) {
                             wv.settings.textZoom = fontSize
+                        }
+                        if (fingerprintScript != appliedFingerprintScript) {
+                            appliedFingerprintScript = fingerprintScript
+                            runCatching { fingerprintScriptHandler?.remove() }
+                            fingerprintScriptHandler = null
+                            if (fingerprintScript != null &&
+                                androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)
+                            ) {
+                                fingerprintScriptHandler = runCatching {
+                                    androidx.webkit.WebViewCompat.addDocumentStartJavaScript(
+                                        wv, fingerprintScript!!, setOf("*")
+                                    )
+                                }.getOrNull()
+                            }
                         }
                         run {
                             val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager

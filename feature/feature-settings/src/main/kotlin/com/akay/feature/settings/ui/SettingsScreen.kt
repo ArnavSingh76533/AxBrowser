@@ -75,6 +75,7 @@ fun SettingsScreen(
     onOpenExtensions: () -> Unit = {},
     onOpenFilterLists: () -> Unit = {},
     onOpenPasswords: () -> Unit = {},
+    onOpenProxySettings: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -230,6 +231,40 @@ fun SettingsScreen(
                     subtitle = "Manage logins AxBrowser has saved for you",
                     onClick = onOpenPasswords
                 )
+                SettingsNavigationItem(
+                    title = "Proxy",
+                    subtitle = "HTTP/HTTPS/SOCKS proxies, rotation, exceptions",
+                    onClick = onOpenProxySettings
+                )
+                SettingsSwitchItem(
+                    title = "Device fingerprint protection",
+                    subtitle = "Randomize signals sites use to recognize this device as new vs. returning",
+                    checked = uiState.fingerprintProtectionEnabled,
+                    onCheckedChange = { viewModel.setFingerprintProtectionEnabled(it) }
+                )
+                if (uiState.fingerprintProtectionEnabled) {
+                    SettingsSwitchItem(
+                        title = "Spoof canvas fingerprint",
+                        checked = uiState.fingerprintSpoofCanvas,
+                        onCheckedChange = { viewModel.setFingerprintSpoofCanvas(it) }
+                    )
+                    SettingsSwitchItem(
+                        title = "Spoof WebGL renderer",
+                        checked = uiState.fingerprintSpoofWebGl,
+                        onCheckedChange = { viewModel.setFingerprintSpoofWebGl(it) }
+                    )
+                    SettingsSwitchItem(
+                        title = "Spoof hardware info",
+                        subtitle = "CPU core count, memory, plugin list",
+                        checked = uiState.fingerprintSpoofHardware,
+                        onCheckedChange = { viewModel.setFingerprintSpoofHardware(it) }
+                    )
+                    SettingsNavigationItem(
+                        title = "New device identity",
+                        subtitle = "Reset the spoofed profile - sites will see this as a brand-new device",
+                        onClick = { viewModel.regenerateFingerprintIdentity() }
+                    )
+                }
                 var showPinDialog by remember { mutableStateOf(false) }
                 var pinInput by remember { mutableStateOf("") }
                 SettingsSwitchItem(

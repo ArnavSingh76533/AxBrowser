@@ -11,6 +11,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.akay.core.data.security.CryptoManager
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -51,6 +52,16 @@ class AxPreferences @Inject constructor(
         val THEME_PRESET = stringPreferencesKey("theme_preset")
         val OPENROUTER_API_KEY_ENC = stringPreferencesKey("openrouter_api_key_enc")
         val AI_MODEL = stringPreferencesKey("ai_model")
+        val PROXY_ENABLED = booleanPreferencesKey("proxy_enabled")
+        val PROXY_ROTATION_MODE = stringPreferencesKey("proxy_rotation_mode")
+        val PROXY_ROTATION_INTERVAL_MIN = intPreferencesKey("proxy_rotation_interval_min")
+        val PROXY_BYPASS_RULES_JSON = stringPreferencesKey("proxy_bypass_rules_json")
+        val PROXY_ACTIVE_INDEX = intPreferencesKey("proxy_active_index")
+        val FINGERPRINT_PROTECTION_ENABLED = booleanPreferencesKey("fingerprint_protection_enabled")
+        val FINGERPRINT_SPOOF_CANVAS = booleanPreferencesKey("fingerprint_spoof_canvas")
+        val FINGERPRINT_SPOOF_WEBGL = booleanPreferencesKey("fingerprint_spoof_webgl")
+        val FINGERPRINT_SPOOF_HARDWARE = booleanPreferencesKey("fingerprint_spoof_hardware")
+        val FINGERPRINT_DEVICE_SEED = stringPreferencesKey("fingerprint_device_seed")
     }
 
     val searchEngine: Flow<String> = context.dataStore.data.map { it[Keys.SEARCH_ENGINE] ?: "https://www.google.com/search?q=" }
@@ -83,6 +94,27 @@ class AxPreferences @Inject constructor(
         prefs[Keys.OPENROUTER_API_KEY_ENC]?.let { enc -> runCatching { cryptoManager.decrypt(enc) }.getOrNull() }
     }
     val aiModel: Flow<String> = context.dataStore.data.map { it[Keys.AI_MODEL] ?: "meta-llama/llama-3.1-8b-instruct:free" }
+
+    val proxyEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.PROXY_ENABLED] ?: false }
+    val proxyRotationMode: Flow<String> = context.dataStore.data.map { it[Keys.PROXY_ROTATION_MODE] ?: "MANUAL" }
+    val proxyRotationIntervalMinutes: Flow<Int> = context.dataStore.data.map { it[Keys.PROXY_ROTATION_INTERVAL_MIN] ?: 10 }
+    val proxyBypassRulesJson: Flow<String> = context.dataStore.data.map { it[Keys.PROXY_BYPASS_RULES_JSON] ?: "[\"<local>\"]" }
+    val proxyActiveIndex: Flow<Int> = context.dataStore.data.map { it[Keys.PROXY_ACTIVE_INDEX] ?: 0 }
+
+    val fingerprintProtectionEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.FINGERPRINT_PROTECTION_ENABLED] ?: false }
+    val fingerprintSpoofCanvas: Flow<Boolean> = context.dataStore.data.map { it[Keys.FINGERPRINT_SPOOF_CANVAS] ?: true }
+    val fingerprintSpoofWebGl: Flow<Boolean> = context.dataStore.data.map { it[Keys.FINGERPRINT_SPOOF_WEBGL] ?: true }
+    val fingerprintSpoofHardware: Flow<Boolean> = context.dataStore.data.map { it[Keys.FINGERPRINT_SPOOF_HARDWARE] ?: true }
+    val fingerprintDeviceSeed: Flow<String> = context.dataStore.data.map { prefs -> prefs[Keys.FINGERPRINT_DEVICE_SEED] ?: "" }
+
+    /** Reads the persisted device fingerprint seed, generating and saving one on first use. */
+    suspend fun getOrCreateFingerprintSeed(): String {
+        val existing = context.dataStore.data.map { it[Keys.FINGERPRINT_DEVICE_SEED] }.first()
+        if (!existing.isNullOrBlank()) return existing
+        val generated = java.util.UUID.randomUUID().toString()
+        context.dataStore.edit { it[Keys.FINGERPRINT_DEVICE_SEED] = generated }
+        return generated
+    }
 
     suspend fun setSearchEngine(url: String) { context.dataStore.edit { it[Keys.SEARCH_ENGINE] = url } }
     suspend fun setHomepage(url: String) { context.dataStore.edit { it[Keys.HOMEPAGE] = url } }
@@ -121,4 +153,20 @@ class AxPreferences @Inject constructor(
         }
     }
     suspend fun setAiModel(modelId: String) { context.dataStore.edit { it[Keys.AI_MODEL] = modelId } }
+
+    suspend fun setProxyEnabled(enabled: Boolean) { context.dataStore.edit { it[Keys.PROXY_ENABLED] = enabled } }
+    suspend fun setProxyRotationMode(mode: String) { context.dataStore.edit { it[Keys.PROXY_ROTATION_MODE] = mode } }
+    suspend fun setProxyRotationIntervalMinutes(minutes: Int) { context.dataStore.edit { it[Keys.PROXY_ROTATION_INTERVAL_MIN] = minutes } }
+    suspend fun setProxyBypassRulesJson(json: String) { context.dataStore.edit { it[Keys.PROXY_BYPASS_RULES_JSON] = json } }
+    suspend fun setProxyActiveIndex(index: Int) { context.dataStore.edit { it[Keys.PROXY_ACTIVE_INDEX] = index } }
+
+    suspend fun setFingerprintProtectionEnabled(enabled: Boolean) { context.dataStore.edit { it[Keys.FINGERPRINT_PROTECTION_ENABLED] = enabled } }
+    suspend fun setFingerprintSpoofCanvas(enabled: Boolean) { context.dataStore.edit { it[Keys.FINGERPRINT_SPOOF_CANVAS] = enabled } }
+    suspend fun setFingerprintSpoofWebGl(enabled: Boolean) { context.dataStore.edit { it[Keys.FINGERPRINT_SPOOF_WEBGL] = enabled } }
+    suspend fun setFingerprintSpoofHardware(enabled: Boolean) { context.dataStore.edit { it[Keys.FINGERPRINT_SPOOF_HARDWARE] = enabled } }
+    suspend fun regenerateFingerprintSeed(): String {
+        val generated = java.util.UUID.randomUUID().toString()
+        context.dataStore.edit { it[Keys.FINGERPRINT_DEVICE_SEED] = generated }
+        return generated
+    }
 }

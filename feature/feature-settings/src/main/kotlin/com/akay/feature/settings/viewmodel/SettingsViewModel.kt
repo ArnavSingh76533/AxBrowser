@@ -59,6 +59,10 @@ data class SettingsUiState(
     val wifiOnlyDownloads: Boolean = false,
     val batterySaverEnabled: Boolean = false,
     val themePreset: String = "Nebula",
+    val fingerprintProtectionEnabled: Boolean = false,
+    val fingerprintSpoofCanvas: Boolean = true,
+    val fingerprintSpoofWebGl: Boolean = true,
+    val fingerprintSpoofHardware: Boolean = true,
     val aiApiKeySet: Boolean = false,
     val aiModel: String = "meta-llama/llama-3.1-8b-instruct:free",
     val aiFreeModels: List<OpenRouterModel> = emptyList(),
@@ -192,6 +196,18 @@ class SettingsViewModel @Inject constructor(
             preferences.themePreset.collect { _uiState.value = _uiState.value.copy(themePreset = it) }
         }
         viewModelScope.launch {
+            preferences.fingerprintProtectionEnabled.collect { _uiState.value = _uiState.value.copy(fingerprintProtectionEnabled = it) }
+        }
+        viewModelScope.launch {
+            preferences.fingerprintSpoofCanvas.collect { _uiState.value = _uiState.value.copy(fingerprintSpoofCanvas = it) }
+        }
+        viewModelScope.launch {
+            preferences.fingerprintSpoofWebGl.collect { _uiState.value = _uiState.value.copy(fingerprintSpoofWebGl = it) }
+        }
+        viewModelScope.launch {
+            preferences.fingerprintSpoofHardware.collect { _uiState.value = _uiState.value.copy(fingerprintSpoofHardware = it) }
+        }
+        viewModelScope.launch {
             preferences.openRouterApiKey.collect { _uiState.value = _uiState.value.copy(aiApiKeySet = !it.isNullOrBlank()) }
         }
         viewModelScope.launch {
@@ -231,6 +247,12 @@ class SettingsViewModel @Inject constructor(
     fun setWifiOnlyDownloads(enabled: Boolean) { viewModelScope.launch { preferences.setWifiOnlyDownloads(enabled) } }
     fun setBatterySaverEnabled(enabled: Boolean) { viewModelScope.launch { preferences.setBatterySaverEnabled(enabled) } }
     fun setThemePreset(name: String) { viewModelScope.launch { preferences.setThemePreset(name) } }
+
+    fun setFingerprintProtectionEnabled(enabled: Boolean) { viewModelScope.launch { preferences.setFingerprintProtectionEnabled(enabled) } }
+    fun setFingerprintSpoofCanvas(enabled: Boolean) { viewModelScope.launch { preferences.setFingerprintSpoofCanvas(enabled) } }
+    fun setFingerprintSpoofWebGl(enabled: Boolean) { viewModelScope.launch { preferences.setFingerprintSpoofWebGl(enabled) } }
+    fun setFingerprintSpoofHardware(enabled: Boolean) { viewModelScope.launch { preferences.setFingerprintSpoofHardware(enabled) } }
+    fun regenerateFingerprintIdentity() { viewModelScope.launch { preferences.regenerateFingerprintSeed() } }
 
     fun setAiApiKey(key: String) {
         viewModelScope.launch { preferences.setOpenRouterApiKey(key) }

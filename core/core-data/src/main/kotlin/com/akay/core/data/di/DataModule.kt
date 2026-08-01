@@ -10,6 +10,7 @@ import com.akay.core.data.db.dao.FilterListDao
 import com.akay.core.data.db.dao.HistoryDao
 import com.akay.core.data.db.dao.PasswordDao
 import com.akay.core.data.db.dao.PermissionDao
+import com.akay.core.data.db.dao.ProxyDao
 import com.akay.core.data.db.dao.TabDao
 import dagger.Module
 import dagger.Provides
@@ -54,6 +55,9 @@ object DataModule {
 
     @Provides
     fun providePasswordDao(database: AxDatabase): PasswordDao = database.passwordDao()
+
+    @Provides
+    fun provideProxyDao(database: AxDatabase): ProxyDao = database.proxyDao()
 
     @Provides
     @Singleton
