@@ -23,6 +23,7 @@ dependencies {
     implementation(libs.lifecycle.viewmodel.compose)
     implementation(libs.datastore.preferences)
     implementation(libs.biometric)
+    implementation(libs.okhttp)
 
     // youtubedl-android: needed for updateYtDlp() in SettingsViewModel
     val youtubedlAndroid = "0.18.1"
