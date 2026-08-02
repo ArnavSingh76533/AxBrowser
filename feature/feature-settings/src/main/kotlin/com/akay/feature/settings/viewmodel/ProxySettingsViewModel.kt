@@ -7,6 +7,7 @@ import com.akay.core.domain.model.ProxyRotationMode
 import com.akay.core.domain.model.ProxyServer
 import com.akay.core.domain.model.ProxyType
 import com.akay.core.domain.repository.ProxyRepository
+import com.akay.core.data.proxy.ProxyManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -29,8 +30,12 @@ data class ProxySettingsUiState(
 @HiltViewModel
 class ProxySettingsViewModel @Inject constructor(
     private val proxyRepository: ProxyRepository,
-    private val preferences: AxPreferences
+    private val preferences: AxPreferences,
+    private val proxyManager: ProxyManager
 ) : ViewModel() {
+
+    val connectionError: StateFlow<String?> = proxyManager.lastError
+    val isConnected: StateFlow<Boolean> = proxyManager.isApplied
 
     val uiState: StateFlow<ProxySettingsUiState> = combine(
         proxyRepository.observeAll(),

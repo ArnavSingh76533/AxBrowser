@@ -7,6 +7,9 @@
 /captures/
 *.jks
 *.keystore
+# Exception: this one IS meant to be committed - it's the stable CI signing
+# key that makes in-place app updates possible (see keystore/README.md).
+!keystore/ci-release.keystore
 
 # yt-dlp binaries — auto-downloaded by Gradle task, NOT committed to git
 app/src/main/jniLibs/arm64-v8a/libytdlp.so

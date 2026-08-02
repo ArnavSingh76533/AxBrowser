@@ -23,7 +23,12 @@ data class ProxyServer(
             ProxyType.SOCKS4 -> "socks4"
             ProxyType.SOCKS5 -> "socks5"
         }
-        val auth = if (!username.isNullOrBlank()) "$username:${password.orEmpty()}@" else ""
-        return "$scheme://$auth$host:$port"
+        val auth = if (!username.isNullOrBlank()) {
+            val encodedUser = java.net.URLEncoder.encode(username, "UTF-8")
+            val encodedPass = java.net.URLEncoder.encode(password.orEmpty(), "UTF-8")
+            "$encodedUser:$encodedPass@"
+        } else ""
+        val safeHost = host.trim()
+        return "$scheme://$auth$safeHost:$port"
     }
 }

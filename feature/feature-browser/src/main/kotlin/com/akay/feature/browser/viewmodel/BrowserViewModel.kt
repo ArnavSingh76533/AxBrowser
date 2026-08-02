@@ -74,7 +74,7 @@ class BrowserViewModel @Inject constructor(
     private val adBlockRepository: AdBlockRepository,
     private val passwordRepository: PasswordRepository,
     val openRouterClient: OpenRouterClient,
-    private val proxyManager: com.akay.feature.browser.proxy.ProxyManager
+    private val proxyManager: com.akay.core.data.proxy.ProxyManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(BrowserUiState())
@@ -248,6 +248,10 @@ class BrowserViewModel @Inject constructor(
                 _fingerprintScript.value = script
             }
         }
+    }
+
+    fun onWebViewReady() {
+        proxyManager.markWebViewReady()
     }
 
     fun clearFillableCredential() {

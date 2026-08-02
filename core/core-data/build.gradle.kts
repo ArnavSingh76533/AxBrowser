@@ -18,6 +18,7 @@ dependencies {
     implementation(libs.datastore.preferences)
     implementation(libs.okhttp)
     implementation(libs.okhttp.logging)
+    implementation(libs.webkit)
     implementation(libs.serialization.json)
     implementation(libs.coroutines.core)
     implementation(libs.coroutines.android)

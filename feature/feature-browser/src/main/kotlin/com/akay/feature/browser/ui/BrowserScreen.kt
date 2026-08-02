@@ -534,6 +534,7 @@ fun BrowserScreen(
                             setLayerType(View.LAYER_TYPE_HARDWARE, null)
                             overScrollMode = View.OVER_SCROLL_ALWAYS
                             isNestedScrollingEnabled = true
+                            viewModel.onWebViewReady()
                             settings.javaScriptEnabled = true
                             settings.domStorageEnabled = true
                             settings.databaseEnabled = true

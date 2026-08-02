@@ -76,7 +76,9 @@ fun SettingsScreen(
     onOpenFilterLists: () -> Unit = {},
     onOpenPasswords: () -> Unit = {},
     onOpenProxySettings: () -> Unit = {},
-    viewModel: SettingsViewModel = hiltViewModel()
+    viewModel: SettingsViewModel = hiltViewModel(),
+    updateViewModel: com.akay.feature.settings.viewmodel.UpdateViewModel = hiltViewModel(),
+    downloadViewModel: com.akay.feature.downloads.viewmodel.DownloadViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
@@ -510,6 +512,99 @@ fun SettingsScreen(
                 }
             }
 
+            SettingsSection(title = "App Updates") {
+                val updateState by updateViewModel.uiState.collectAsState()
+                val downloadState by downloadViewModel.state.collectAsState()
+                var updateDownloadId by remember { mutableStateOf<String?>(null) }
+                val updateDownloadItem = updateDownloadId?.let { id -> downloadState.downloads.firstOrNull { it.id == id } }
+
+                LaunchedEffect(updateDownloadItem?.status) {
+                    if (updateDownloadItem?.status == com.akay.feature.downloads.viewmodel.ItemStatus.COMPLETED) {
+                        installApk(context, updateDownloadItem.resolvedPath)
+                    }
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.weight(1f)) {
+                        Text("AxBrowser v${updateState.currentVersion}", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            when {
+                                updateState.checking -> "Checking\u2026"
+                                updateState.error != null -> updateState.error!!
+                                updateState.updateAvailable -> "v${updateState.latestVersion} is available"
+                                updateState.lastChecked != null -> "You're up to date"
+                                else -> "Tap to check for the latest version"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (updateState.updateAvailable) Primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (updateState.checking) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                    } else {
+                        TextButton(onClick = { updateViewModel.checkForUpdates() }) { Text("Check") }
+                    }
+                }
+
+                if (updateState.updateAvailable) {
+                    Spacer(Modifier.height(8.dp))
+                    if (!updateState.releaseNotes.isNullOrBlank()) {
+                        Text(
+                            updateState.releaseNotes!!,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 4,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
+
+                    when (updateDownloadItem?.status) {
+                        null -> {
+                            Button(
+                                onClick = {
+                                    val url = updateState.apkDownloadUrl ?: return@Button
+                                    updateDownloadId = downloadViewModel.enqueue(
+                                        url = url,
+                                        filename = updateState.apkAssetName,
+                                        useYtDlp = false
+                                    )
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(containerColor = Primary)
+                            ) { Text("Download update") }
+                        }
+                        com.akay.feature.downloads.viewmodel.ItemStatus.COMPLETED -> {
+                            Button(
+                                onClick = { installApk(context, updateDownloadItem.resolvedPath) },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(containerColor = Primary)
+                            ) { Text("Install update") }
+                        }
+                        com.akay.feature.downloads.viewmodel.ItemStatus.FAILED,
+                        com.akay.feature.downloads.viewmodel.ItemStatus.CANCELLED -> {
+                            Text(
+                                "Download failed \u2014 open Downloads to retry.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                        else -> {
+                            LinearProgressIndicator(
+                                progress = { updateDownloadItem?.progress ?: 0f },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "Downloading\u2026 check Downloads for progress",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+
             SettingsSection(title = "General") {
                 SettingsSwitchItem(
                     title = "Clear cache on exit",
@@ -885,5 +980,36 @@ fun LabeledSlider(
             onValueChangeFinished = { onChange(sliderValue.toInt()) },
             valueRange = range.first.toFloat()..range.last.toFloat()
         )
+    }
+}
+
+/**
+ * Launches the system package installer for a downloaded update APK. Works
+ * as an in-place update (no manual uninstall) as long as the APK is signed
+ * with the same key as the currently installed app.
+ */
+private fun installApk(context: android.content.Context, apkPath: String) {
+    runCatching {
+        val file = java.io.File(apkPath)
+        if (!file.exists()) return
+
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O &&
+            !context.packageManager.canRequestPackageInstalls()
+        ) {
+            val settingsIntent = android.content.Intent(
+                android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                android.net.Uri.parse("package:${context.packageName}")
+            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(settingsIntent)
+            return
+        }
+
+        val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        val installIntent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(installIntent)
     }
 }

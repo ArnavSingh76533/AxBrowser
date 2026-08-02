@@ -17,8 +17,11 @@ class AxAndroidApplication : Plugin<Project> {
                     applicationId = "com.akay.axbrowser"
                     minSdk = 26
                     targetSdk = 34
-                    versionCode = 1
-                    versionName = "1.0.0"
+                    // Release builds pass -PaxVersionName=X.Y.Z -PaxVersionCode=N (see release.yml,
+                    // driven by the git tag) so the app's own version actually advances - required
+                    // for the in-app update checker to correctly detect "already up to date".
+                    versionCode = (target.findProperty("axVersionCode") as? String)?.toIntOrNull() ?: 1
+                    versionName = (target.findProperty("axVersionName") as? String) ?: "1.0.0"
 
                     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
                 }

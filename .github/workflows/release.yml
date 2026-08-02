@@ -40,39 +40,44 @@ jobs:
 
     - name: Extract version from tag
       id: version
-      run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+      run: |
+        VERSION="${GITHUB_REF#refs/tags/v}"
+        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+        # Turn "1.2.3" into a monotonically increasing int version code (10203),
+        # falling back to the run number if the tag isn't plain semver.
+        IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+        if [[ "$MAJOR" =~ ^[0-9]+$ && "$MINOR" =~ ^[0-9]+$ && "$PATCH" =~ ^[0-9]+$ ]]; then
+          CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
+        else
+          CODE=${{ github.run_number }}
+        fi
+        echo "VERSION_CODE=$CODE" >> $GITHUB_OUTPUT
 
     - name: Build Release APK
-      run: ./gradlew assembleRelease --no-daemon --stacktrace
+      run: ./gradlew assembleRelease --no-daemon --stacktrace -PaxVersionName=${{ steps.version.outputs.VERSION }} -PaxVersionCode=${{ steps.version.outputs.VERSION_CODE }}
 
     - name: Build Release AAB
-      run: ./gradlew bundleRelease --no-daemon --stacktrace
+      run: ./gradlew bundleRelease --no-daemon --stacktrace -PaxVersionName=${{ steps.version.outputs.VERSION }} -PaxVersionCode=${{ steps.version.outputs.VERSION_CODE }}
 
-    - name: Sign APK with debug key
+    - name: Sign APK with stable release key
       run: |
-        # Find build-tools
+        # Uses a keystore committed to the repo at keystore/ci-release.keystore so
+        # every release is signed with the SAME key. This is required for Android
+        # to accept in-place updates (install-over-existing-app) - a keystore that
+        # changes between releases forces users to uninstall before reinstalling.
         BUILD_TOOLS=$(ls ${ANDROID_HOME}/build-tools/ | sort -V | tail -1)
-        
-        # Create debug keystore
-        keytool -genkey -v -keystore /tmp/debug.keystore \
-          -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
-          -storepass android -keypass android \
-          -dname "CN=Debug,OU=Debug,O=Debug,L=Debug,ST=Debug,C=US"
-        
-        # Find the unsigned APK
+
         UNSIGNED_APK=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
-        
+
         if [ -n "$UNSIGNED_APK" ]; then
-          # Zipalign
           ${ANDROID_HOME}/build-tools/${BUILD_TOOLS}/zipalign -v -p 4 "$UNSIGNED_APK" /tmp/aligned.apk
-          
-          # Sign with debug key
+
           ${ANDROID_HOME}/build-tools/${BUILD_TOOLS}/apksigner sign \
-            --ks /tmp/debug.keystore --ks-pass pass:android \
-            --key-pass pass:android \
+            --ks keystore/ci-release.keystore --ks-pass pass:axbrowser123 \
+            --ks-key-alias axbrowser --key-pass pass:axbrowser123 \
             --out AxBrowser-v${{ steps.version.outputs.VERSION }}.apk \
             /tmp/aligned.apk
-          
+
           echo "APK signed successfully"
         else
           echo "ERROR: No APK found to sign"
