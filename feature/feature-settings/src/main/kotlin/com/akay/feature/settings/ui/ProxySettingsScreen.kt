@@ -38,6 +38,7 @@ fun ProxySettingsScreen(
     viewModel: ProxySettingsViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val connectionError by viewModel.connectionError.collectAsState()
     var editingProxy by remember { mutableStateOf<ProxyServer?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
     var newBypassRule by remember { mutableStateOf("") }
@@ -70,6 +71,20 @@ fun ProxySettingsScreen(
                     activeLabel = uiState.proxies.filter { it.enabled }.getOrNull(uiState.activeIndex)?.label,
                     onToggle = { viewModel.setProxyEnabled(it) }
                 )
+                if (!connectionError.isNullOrBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    ElevatedCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+                    ) {
+                        Text(
+                            "Couldn't connect: $connectionError",
+                            modifier = Modifier.padding(12.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
+                }
                 Spacer(Modifier.height(16.dp))
             }
 
