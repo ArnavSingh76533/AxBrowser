@@ -1,6 +1,7 @@
 package com.akay.feature.settings.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -10,6 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -288,9 +290,20 @@ private fun ProxyEditDialog(
                     OutlinedTextField(
                         value = type.name, onValueChange = {}, readOnly = true,
                         label = { Text("Type") },
+                        trailingIcon = { Icon(Icons.Default.ArrowDropDown, null) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    // A transparent box on top of the whole field reliably
+                    // captures the tap - a `.clickable` directly on a
+                    // readOnly OutlinedTextField can get swallowed by its
+                    // internal text-selection touch handling instead.
+                    Box(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { typeMenuExpanded = true }
+                            .matchParentSize()
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) { typeMenuExpanded = true }
                     )
                     DropdownMenu(expanded = typeMenuExpanded, onDismissRequest = { typeMenuExpanded = false }) {
                         ProxyType.values().forEach { t ->
