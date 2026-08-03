@@ -583,6 +583,7 @@ fun BrowserScreen(
 
                             webViewClient = AxWebViewClient(
                                 context = ctx,
+                                activeProxy = { viewModel.activeProxy.value },
                                 onPageStarted = { url ->
                                     AdBlockEngine.resetCounter()
                                     viewModel.updateUrl(url)

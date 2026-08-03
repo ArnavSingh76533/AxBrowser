@@ -250,6 +250,8 @@ class BrowserViewModel @Inject constructor(
         }
     }
 
+    val activeProxy: StateFlow<com.akay.core.domain.model.ProxyServer?> = proxyManager.activeProxy
+
     fun onWebViewReady() {
         proxyManager.markWebViewReady()
     }

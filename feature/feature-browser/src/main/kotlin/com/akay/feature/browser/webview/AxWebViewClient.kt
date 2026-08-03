@@ -2,10 +2,12 @@ package com.akay.feature.browser.webview
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.webkit.HttpAuthHandler
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import com.akay.core.domain.model.ProxyServer
 import com.akay.feature.browser.adblock.AdBlockEngine
 import com.akay.feature.browser.devconsole.NetworkInterceptor
 import com.akay.feature.browser.devconsole.NetworkRequest
@@ -22,8 +24,21 @@ class AxWebViewClient(
     private val onError: (String) -> Unit,
     private val adBlockerEnabled: () -> Boolean = { true },
     private val httpsUpgradeEnabled: () -> Boolean = { true },
-    private val onMediaDetected: (url: String, mimeType: String?) -> Unit = { _, _ -> }
+    private val onMediaDetected: (url: String, mimeType: String?) -> Unit = { _, _ -> },
+    private val activeProxy: () -> ProxyServer? = { null }
 ) : WebViewClient() {
+
+    override fun onReceivedHttpAuthRequest(view: WebView?, handler: HttpAuthHandler?, host: String?, realm: String?) {
+        val proxy = activeProxy()
+        val proxyUsername = proxy?.username
+        if (handler != null && proxy != null && !proxyUsername.isNullOrBlank() &&
+            (host.isNullOrBlank() || host.equals(proxy.host, ignoreCase = true))
+        ) {
+            handler.proceed(proxyUsername, proxy.password.orEmpty())
+            return
+        }
+        super.onReceivedHttpAuthRequest(view, handler, host, realm)
+    }
 
     private val blockedDomains = mutableSetOf<String>()
 
