@@ -16,6 +16,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -78,14 +79,17 @@ class ProxyManager @Inject constructor(
                 proxyRepository.observeAll(),
                 preferences.proxyBypassRulesJson
             ) { enabled, proxies, bypassJson -> Triple(enabled, proxies, bypassJson) }
+                .catch { e -> Log.w("ProxyManager", "Proxy state flow failed, proxy disabled for this session", e) }
                 .collect { state ->
                     if (!webViewReady) {
                         pendingState = state
                         return@collect
                     }
                     val (enabled, proxies, bypassJson) = state
-                    applyCurrentState(enabled, proxies, bypassJson)
-                    restartRotationTimerIfNeeded(enabled, proxies)
+                    runCatching { applyCurrentState(enabled, proxies, bypassJson) }
+                        .onFailure { e -> Log.w("ProxyManager", "applyCurrentState failed", e) }
+                    runCatching { restartRotationTimerIfNeeded(enabled, proxies) }
+                        .onFailure { e -> Log.w("ProxyManager", "restartRotationTimerIfNeeded failed", e) }
                 }
         }
     }

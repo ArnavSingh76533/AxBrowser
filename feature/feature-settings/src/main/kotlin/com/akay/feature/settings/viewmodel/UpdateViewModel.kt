@@ -48,15 +48,20 @@ class UpdateViewModel @Inject constructor(
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
+                    // "nightly" is a rolling release CI updates on every push to main
+                    // (see ci.yml) - it's what actually matches the debug-variant build
+                    // most people are running day to day. Fetching by tag (rather than
+                    // /releases/latest) works even though it's marked prerelease, which
+                    // /releases/latest would otherwise silently exclude.
                     val request = Request.Builder()
-                        .url("https://api.github.com/repos/$owner/$repo/releases/latest")
+                        .url("https://api.github.com/repos/$owner/$repo/releases/tags/nightly")
                         .addHeader("Accept", "application/vnd.github+json")
                         .build()
                     okHttpClient.newCall(request).execute().use { response ->
                         if (!response.isSuccessful) error("GitHub returned ${response.code}")
                         val body = response.body?.string().orEmpty()
                         val json = JSONObject(body)
-                        val tag = json.optString("tag_name").removePrefix("v")
+                        val tag = json.optString("tag_name")
                         val notes = json.optString("body").take(500)
                         val assets = json.optJSONArray("assets")
                         var apkUrl: String? = null
@@ -72,7 +77,11 @@ class UpdateViewModel @Inject constructor(
                                 }
                             }
                         }
-                        Triple(tag, notes, apkUrl to apkName)
+                        // The release's own title carries the real "1.0.<run_number>" version
+                        // (tag_name is just the constant "nightly"); parse it out of the name.
+                        val releaseName = json.optString("name")
+                        val versionFromName = Regex("""(\d+\.\d+\.\d+)""").find(releaseName)?.value ?: tag
+                        Triple(versionFromName, notes, apkUrl to apkName)
                     }
                 }
             }

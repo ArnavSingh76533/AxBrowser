@@ -10,6 +10,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build & Test
@@ -41,8 +44,16 @@ jobs:
           gradle wrapper --gradle-version 8.6 --no-daemon
         fi
 
+    - name: Compute nightly version
+      id: nightlyversion
+      run: |
+        # Every push to main is a new "nightly" build - version by run number so it
+        # always advances (1.0.<run_number>), letting the in-app update checker
+        # correctly tell "installed" from "just built".
+        echo "VERSION=1.0.${{ github.run_number }}" >> $GITHUB_OUTPUT
+
     - name: Build Debug APK
-      run: ./gradlew assembleDebug --no-daemon --stacktrace
+      run: ./gradlew assembleDebug --no-daemon --stacktrace -PaxVersionName=${{ steps.nightlyversion.outputs.VERSION }} -PaxVersionCode=${{ github.run_number }}
 
     - name: Run Unit Tests
       run: ./gradlew testDebugUnitTest --no-daemon --stacktrace
@@ -56,6 +67,24 @@ jobs:
         name: AxBrowser-debug-${{ github.sha }}
         path: app/build/outputs/apk/debug/*.apk
         retention-days: 14
+
+    - name: Publish rolling nightly release
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      run: |
+        SIGNED_APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -1)
+        cp "$SIGNED_APK" "AxBrowser-nightly.apk"
+
+    - name: Create/update nightly GitHub Release
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: nightly
+        name: "Nightly build v${{ steps.nightlyversion.outputs.VERSION }}"
+        body: "Automatic build from the latest commit on main (${{ github.sha }}). This is the debug-signed build (package id ends in .debug) - installing over a previous nightly updates it in place."
+        prerelease: true
+        files: AxBrowser-nightly.apk
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Upload Test Results
       uses: actions/upload-artifact@v4

@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
 import android.util.Log
+import com.akay.core.data.crash.CrashLogger
 import com.akay.core.data.proxy.ProxyManager
 import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
@@ -19,9 +20,12 @@ class AxBrowserApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        CrashLogger.install(this)
         initYoutubeDL()
-        createNotificationChannels()
-        proxyManager.start()
+        runCatching { createNotificationChannels() }
+            .onFailure { e -> Log.e("AxBrowser", "Notification channel setup failed", e) }
+        runCatching { proxyManager.start() }
+            .onFailure { e -> Log.e("AxBrowser", "ProxyManager failed to start", e) }
     }
 
     private fun initYoutubeDL() {

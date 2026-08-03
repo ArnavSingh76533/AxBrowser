@@ -248,6 +248,9 @@ class SettingsViewModel @Inject constructor(
     fun setBatterySaverEnabled(enabled: Boolean) { viewModelScope.launch { preferences.setBatterySaverEnabled(enabled) } }
     fun setThemePreset(name: String) { viewModelScope.launch { preferences.setThemePreset(name) } }
 
+    fun readLastCrashLog(): String? = com.akay.core.data.crash.CrashLogger.readLastCrash(context)
+    fun clearLastCrashLog() { com.akay.core.data.crash.CrashLogger.clearLastCrash(context) }
+
     fun setFingerprintProtectionEnabled(enabled: Boolean) { viewModelScope.launch { preferences.setFingerprintProtectionEnabled(enabled) } }
     fun setFingerprintSpoofCanvas(enabled: Boolean) { viewModelScope.launch { preferences.setFingerprintSpoofCanvas(enabled) } }
     fun setFingerprintSpoofWebGl(enabled: Boolean) { viewModelScope.launch { preferences.setFingerprintSpoofWebGl(enabled) } }

@@ -26,10 +26,28 @@ class AxAndroidApplication : Plugin<Project> {
                     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
                 }
 
+                signingConfigs {
+                    create("stable") {
+                        // Same committed keystore used for GitHub Releases (see keystore/README.md).
+                        // Used for BOTH build types so every CI build - debug or release - can be
+                        // installed in place over the previous one; the default debug keystore is
+                        // regenerated fresh on every ephemeral GitHub Actions runner, which was
+                        // silently breaking in-place updates for debug builds too.
+                        val keystoreFile = rootProject.file("keystore/ci-release.keystore")
+                        if (keystoreFile.exists()) {
+                            storeFile = keystoreFile
+                            storePassword = "axbrowser123"
+                            keyAlias = "axbrowser"
+                            keyPassword = "axbrowser123"
+                        }
+                    }
+                }
+
                 buildTypes {
                     release {
                         isMinifyEnabled = true
                         isShrinkResources = true
+                        signingConfig = signingConfigs.getByName("stable")
                         proguardFiles(
                             getDefaultProguardFile("proguard-android-optimize.txt"),
                             "proguard-rules.pro"
@@ -38,6 +56,7 @@ class AxAndroidApplication : Plugin<Project> {
                     debug {
                         isMinifyEnabled = false
                         applicationIdSuffix = ".debug"
+                        signingConfig = signingConfigs.getByName("stable")
                     }
                 }
 
