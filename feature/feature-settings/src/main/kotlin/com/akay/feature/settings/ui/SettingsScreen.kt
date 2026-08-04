@@ -609,46 +609,44 @@ fun SettingsScreen(
                 }
             }
 
-            item {
-                val crashLog = remember { viewModel.readLastCrashLog() }
-                if (!crashLog.isNullOrBlank()) {
-                    var showCrashDialog by remember { mutableStateOf(false) }
-                    SettingsSection(title = "Diagnostics") {
-                        SettingsNavigationItem(
-                            title = "Last crash detected",
-                            subtitle = "AxBrowser closed unexpectedly last time \u2014 tap to view details",
-                            onClick = { showCrashDialog = true }
-                        )
-                    }
-                    if (showCrashDialog) {
-                        val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
-                        AlertDialog(
-                            onDismissRequest = { showCrashDialog = false },
-                            title = { Text("Last crash") },
-                            text = {
-                                androidx.compose.foundation.lazy.LazyColumn(modifier = Modifier.heightIn(max = 400.dp)) {
-                                    item {
-                                        Text(
-                                            crashLog,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                                        )
-                                    }
+            val crashLog = remember { viewModel.readLastCrashLog() }
+            if (!crashLog.isNullOrBlank()) {
+                var showCrashDialog by remember { mutableStateOf(false) }
+                SettingsSection(title = "Diagnostics") {
+                    SettingsNavigationItem(
+                        title = "Last crash detected",
+                        subtitle = "AxBrowser closed unexpectedly last time \u2014 tap to view details",
+                        onClick = { showCrashDialog = true }
+                    )
+                }
+                if (showCrashDialog) {
+                    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+                    AlertDialog(
+                        onDismissRequest = { showCrashDialog = false },
+                        title = { Text("Last crash") },
+                        text = {
+                            androidx.compose.foundation.lazy.LazyColumn(modifier = Modifier.heightIn(max = 400.dp)) {
+                                item {
+                                    Text(
+                                        crashLog,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                    )
                                 }
-                            },
-                            confirmButton = {
-                                TextButton(onClick = {
-                                    clipboard.setText(androidx.compose.ui.text.AnnotatedString(crashLog))
-                                }) { Text("Copy") }
-                            },
-                            dismissButton = {
-                                TextButton(onClick = {
-                                    viewModel.clearLastCrashLog()
-                                    showCrashDialog = false
-                                }) { Text("Dismiss") }
                             }
-                        )
-                    }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                clipboard.setText(androidx.compose.ui.text.AnnotatedString(crashLog))
+                            }) { Text("Copy") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = {
+                                viewModel.clearLastCrashLog()
+                                showCrashDialog = false
+                            }) { Text("Dismiss") }
+                        }
+                    )
                 }
             }
 
