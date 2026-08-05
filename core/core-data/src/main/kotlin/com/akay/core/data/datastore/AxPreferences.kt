@@ -62,6 +62,8 @@ class AxPreferences @Inject constructor(
         val FINGERPRINT_SPOOF_WEBGL = booleanPreferencesKey("fingerprint_spoof_webgl")
         val FINGERPRINT_SPOOF_HARDWARE = booleanPreferencesKey("fingerprint_spoof_hardware")
         val FINGERPRINT_DEVICE_SEED = stringPreferencesKey("fingerprint_device_seed")
+        val PENDING_UPDATE_APK_PATH = stringPreferencesKey("pending_update_apk_path")
+        val PENDING_UPDATE_VERSION = stringPreferencesKey("pending_update_version")
     }
 
     val searchEngine: Flow<String> = context.dataStore.data.map { it[Keys.SEARCH_ENGINE] ?: "https://www.google.com/search?q=" }
@@ -106,6 +108,17 @@ class AxPreferences @Inject constructor(
     val fingerprintSpoofWebGl: Flow<Boolean> = context.dataStore.data.map { it[Keys.FINGERPRINT_SPOOF_WEBGL] ?: true }
     val fingerprintSpoofHardware: Flow<Boolean> = context.dataStore.data.map { it[Keys.FINGERPRINT_SPOOF_HARDWARE] ?: true }
     val fingerprintDeviceSeed: Flow<String> = context.dataStore.data.map { prefs -> prefs[Keys.FINGERPRINT_DEVICE_SEED] ?: "" }
+
+    /** Path to a fully-downloaded update APK waiting to be installed, and which version it is - survives navigation, backgrounding, even process death. */
+    val pendingUpdateApkPath: Flow<String?> = context.dataStore.data.map { it[Keys.PENDING_UPDATE_APK_PATH] }
+    val pendingUpdateVersion: Flow<String?> = context.dataStore.data.map { it[Keys.PENDING_UPDATE_VERSION] }
+
+    suspend fun setPendingUpdate(apkPath: String?, version: String?) {
+        context.dataStore.edit { prefs ->
+            if (apkPath == null) prefs.remove(Keys.PENDING_UPDATE_APK_PATH) else prefs[Keys.PENDING_UPDATE_APK_PATH] = apkPath
+            if (version == null) prefs.remove(Keys.PENDING_UPDATE_VERSION) else prefs[Keys.PENDING_UPDATE_VERSION] = version
+        }
+    }
 
     /** Reads the persisted device fingerprint seed, generating and saving one on first use. */
     suspend fun getOrCreateFingerprintSeed(): String {

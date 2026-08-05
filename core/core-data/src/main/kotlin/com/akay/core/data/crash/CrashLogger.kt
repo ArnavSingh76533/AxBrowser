@@ -1,5 +1,7 @@
 package com.akay.core.data.crash
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import java.io.File
 import java.io.PrintWriter
@@ -10,9 +12,10 @@ import java.util.Locale
 
 /**
  * Installs a global uncaught-exception handler that writes the crash's full
- * stack trace to a file before the process dies, and lets it be read back
- * afterward (e.g. from a Settings screen) - this app has no remote crash
- * reporting, so without this a crash is otherwise a dead end to debug.
+ * stack trace to a file before the process dies AND copies it straight to
+ * the clipboard, so it can be pasted immediately without hunting through
+ * Settings - this app has no remote crash reporting, so without this a
+ * crash is otherwise a dead end to debug.
  */
 object CrashLogger {
 
@@ -22,16 +25,25 @@ object CrashLogger {
         val appContext = context.applicationContext
         val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            runCatching { writeCrashLog(appContext, thread, throwable) }
+            val content = runCatching { buildCrashReport(appContext, thread, throwable) }.getOrNull()
+            if (content != null) {
+                runCatching { File(appContext.filesDir, FILE_NAME).writeText(content) }
+                runCatching { copyToClipboard(appContext, content) }
+            }
             previousHandler?.uncaughtException(thread, throwable)
         }
     }
 
-    private fun writeCrashLog(context: Context, thread: Thread, throwable: Throwable) {
+    private fun copyToClipboard(context: Context, text: String) {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+        clipboard.setPrimaryClip(ClipData.newPlainText("AxBrowser crash log", text))
+    }
+
+    private fun buildCrashReport(context: Context, thread: Thread, throwable: Throwable): String {
         val sw = StringWriter()
         throwable.printStackTrace(PrintWriter(sw))
         val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
-        val content = buildString {
+        return buildString {
             appendLine("AxBrowser crash report")
             appendLine("Time: $timestamp")
             appendLine("Thread: ${thread.name}")
@@ -39,7 +51,6 @@ object CrashLogger {
             appendLine()
             append(sw.toString())
         }
-        File(context.filesDir, FILE_NAME).writeText(content)
     }
 
     fun readLastCrash(context: Context): String? {

@@ -524,23 +524,24 @@ fun SettingsScreen(
 
                 LaunchedEffect(updateDownloadItem?.status) {
                     if (updateDownloadItem?.status == com.akay.feature.downloads.viewmodel.ItemStatus.COMPLETED) {
-                        installApk(context, updateDownloadItem.resolvedPath)
+                        updateViewModel.markDownloadComplete(updateDownloadItem.resolvedPath)
                     }
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.weight(1f)) {
-                        Text("AxBrowser v${updateState.currentVersion}", style = MaterialTheme.typography.bodyMedium)
+                        Text("Installed: v${updateState.currentVersion}", style = MaterialTheme.typography.bodyMedium)
                         Text(
                             when {
                                 updateState.checking -> "Checking\u2026"
                                 updateState.error != null -> updateState.error!!
-                                updateState.updateAvailable -> "v${updateState.latestVersion} is available"
-                                updateState.lastChecked != null -> "You're up to date"
+                                updateState.pendingInstallPath != null -> "v${updateState.latestVersion} downloaded \u2014 ready to install"
+                                updateState.updateAvailable -> "Latest: v${updateState.latestVersion} \u2014 update available"
+                                updateState.lastChecked != null -> "Latest: v${updateState.latestVersion ?: updateState.currentVersion} \u2014 you're up to date"
                                 else -> "Tap to check for the latest version"
                             },
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (updateState.updateAvailable) Primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            color = if (updateState.updateAvailable || updateState.pendingInstallPath != null) Primary else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     if (updateState.checking) {
@@ -550,7 +551,14 @@ fun SettingsScreen(
                     }
                 }
 
-                if (updateState.updateAvailable) {
+                if (updateState.pendingInstallPath != null) {
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = { installApk(context, updateState.pendingInstallPath!!) },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Primary)
+                    ) { Text("Install update (v${updateState.latestVersion})") }
+                } else if (updateState.updateAvailable) {
                     Spacer(Modifier.height(8.dp))
                     if (!updateState.releaseNotes.isNullOrBlank()) {
                         Text(
@@ -579,11 +587,8 @@ fun SettingsScreen(
                             ) { Text("Download update") }
                         }
                         com.akay.feature.downloads.viewmodel.ItemStatus.COMPLETED -> {
-                            Button(
-                                onClick = { installApk(context, updateDownloadItem.resolvedPath) },
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = ButtonDefaults.buttonColors(containerColor = Primary)
-                            ) { Text("Install update") }
+                            // markDownloadComplete already fired via LaunchedEffect above,
+                            // pendingInstallPath branch will take over on next recomposition.
                         }
                         com.akay.feature.downloads.viewmodel.ItemStatus.FAILED,
                         com.akay.feature.downloads.viewmodel.ItemStatus.CANCELLED -> {
@@ -600,7 +605,7 @@ fun SettingsScreen(
                             )
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                "Downloading\u2026 check Downloads for progress",
+                                "Downloading\u2026 also visible in the notification and Downloads screen if you navigate away",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
