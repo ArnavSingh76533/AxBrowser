@@ -139,6 +139,39 @@ class BrowserViewModel @Inject constructor(
         addressQuery.value = query
     }
 
+    // ---- Device fingerprint spoofing ----
+    // Declared before init{} on purpose: init calls observeFingerprintSettings(),
+    // whose coroutine can write to _fingerprintScript as early as its first
+    // synchronous emission - if that property were declared *after* init{} in
+    // the class body, Kotlin's in-order member initialization means it could
+    // still be null (uninitialized) at that point, causing an intermittent NPE
+    // crash depending on how fast the underlying DataStore reads resolve.
+    private val _fingerprintScript = MutableStateFlow<String?>(null)
+    val fingerprintScript: StateFlow<String?> = _fingerprintScript.asStateFlow()
+
+    private fun observeFingerprintSettings() {
+        viewModelScope.launch {
+            val fallbackSeed = preferences.getOrCreateFingerprintSeed()
+            kotlinx.coroutines.flow.combine(
+                preferences.fingerprintProtectionEnabled,
+                preferences.fingerprintSpoofCanvas,
+                preferences.fingerprintSpoofWebGl,
+                preferences.fingerprintSpoofHardware,
+                preferences.fingerprintDeviceSeed
+            ) { enabled, spoofCanvas, spoofWebGl, spoofHardware, seed ->
+                if (!enabled) {
+                    null
+                } else {
+                    com.akay.feature.browser.fingerprint.FingerprintSpoofing.buildScript(
+                        seed.ifBlank { fallbackSeed }, spoofCanvas, spoofWebGl, spoofHardware
+                    )
+                }
+            }.collect { script ->
+                _fingerprintScript.value = script
+            }
+        }
+    }
+
     init {
         loadTabs()
         viewModelScope.launch {
@@ -222,33 +255,6 @@ class BrowserViewModel @Inject constructor(
         .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, null)
     val aiModel: StateFlow<String> = preferences.aiModel
         .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, "meta-llama/llama-3.1-8b-instruct:free")
-
-    // ---- Device fingerprint spoofing ----
-    private val _fingerprintScript = MutableStateFlow<String?>(null)
-    val fingerprintScript: StateFlow<String?> = _fingerprintScript.asStateFlow()
-
-    private fun observeFingerprintSettings() {
-        viewModelScope.launch {
-            val fallbackSeed = preferences.getOrCreateFingerprintSeed()
-            kotlinx.coroutines.flow.combine(
-                preferences.fingerprintProtectionEnabled,
-                preferences.fingerprintSpoofCanvas,
-                preferences.fingerprintSpoofWebGl,
-                preferences.fingerprintSpoofHardware,
-                preferences.fingerprintDeviceSeed
-            ) { enabled, spoofCanvas, spoofWebGl, spoofHardware, seed ->
-                if (!enabled) {
-                    null
-                } else {
-                    com.akay.feature.browser.fingerprint.FingerprintSpoofing.buildScript(
-                        seed.ifBlank { fallbackSeed }, spoofCanvas, spoofWebGl, spoofHardware
-                    )
-                }
-            }.collect { script ->
-                _fingerprintScript.value = script
-            }
-        }
-    }
 
     val activeProxy: StateFlow<com.akay.core.domain.model.ProxyServer?> = proxyManager.activeProxy
 
