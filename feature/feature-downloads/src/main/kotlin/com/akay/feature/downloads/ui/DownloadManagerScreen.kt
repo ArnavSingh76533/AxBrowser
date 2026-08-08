@@ -225,7 +225,14 @@ fun DownloadCard(
                         IconButton(onClick = { onDelete(item.id) }) { Icon(Icons.Default.Delete, "Delete") }
                     }
                     ItemStatus.COMPLETED -> {
-                        IconButton(onClick = { onOpen(item.id) }) { Icon(Icons.Default.PlayArrow, "Play") }
+                        val context = androidx.compose.ui.platform.LocalContext.current
+                        if (com.akay.core.data.util.ApkInstaller.isApk(item.displayName)) {
+                            IconButton(onClick = { com.akay.core.data.util.ApkInstaller.install(context, item.resolvedPath) }) {
+                                Icon(Icons.Default.InstallMobile, "Install", tint = Primary)
+                            }
+                        } else {
+                            IconButton(onClick = { onOpen(item.id) }) { Icon(Icons.Default.PlayArrow, "Play") }
+                        }
                         IconButton(onClick = { onShare(item.id) }) { Icon(Icons.Default.Share, "Share") }
                         IconButton(onClick = { onDelete(item.id) }) { Icon(Icons.Default.Delete, "Delete") }
                     }

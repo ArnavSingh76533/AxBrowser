@@ -144,7 +144,8 @@ fun BrowserNavHost() {
                     onOpenExtensions = { navController.navigate("userscripts") },
                     onOpenFilterLists = { navController.navigate("filterlists") },
                     onOpenPasswords = { navController.navigate("passwords") },
-                    onOpenProxySettings = { navController.navigate("proxy") }
+                    onOpenProxySettings = { navController.navigate("proxy") },
+                    downloadViewModel = downloadViewModel
                 )
             }
             composable("userscripts") {

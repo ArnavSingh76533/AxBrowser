@@ -554,7 +554,7 @@ fun SettingsScreen(
                 if (updateState.pendingInstallPath != null) {
                     Spacer(Modifier.height(8.dp))
                     Button(
-                        onClick = { installApk(context, updateState.pendingInstallPath!!) },
+                        onClick = { com.akay.core.data.util.ApkInstaller.install(context, updateState.pendingInstallPath!!) },
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(containerColor = Primary)
                     ) { Text("Install update (v${updateState.latestVersion})") }
@@ -1030,36 +1030,5 @@ fun LabeledSlider(
             onValueChangeFinished = { onChange(sliderValue.toInt()) },
             valueRange = range.first.toFloat()..range.last.toFloat()
         )
-    }
-}
-
-/**
- * Launches the system package installer for a downloaded update APK. Works
- * as an in-place update (no manual uninstall) as long as the APK is signed
- * with the same key as the currently installed app.
- */
-private fun installApk(context: android.content.Context, apkPath: String) {
-    runCatching {
-        val file = java.io.File(apkPath)
-        if (!file.exists()) return
-
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O &&
-            !context.packageManager.canRequestPackageInstalls()
-        ) {
-            val settingsIntent = android.content.Intent(
-                android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                android.net.Uri.parse("package:${context.packageName}")
-            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(settingsIntent)
-            return
-        }
-
-        val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-        val installIntent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, "application/vnd.android.package-archive")
-            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        context.startActivity(installIntent)
     }
 }

@@ -10,6 +10,7 @@ android {
 
 dependencies {
     implementation(project(":core:core-domain"))
+    implementation(libs.core.ktx)
 
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
