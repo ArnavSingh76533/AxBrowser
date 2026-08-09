@@ -1041,6 +1041,19 @@ fun BrowserScreen(
                 }.getOrDefault(emptyList())
             }
 
+            override suspend fun scrapeStructured(itemSelector: String, fields: Map<String, String>): List<Map<String, String>> {
+                val wv = webView ?: return emptyList()
+                if (itemSelector.isBlank() || fields.isEmpty()) return emptyList()
+                val raw = unwrapJsString(wv.evalJs(com.akay.feature.browser.agent.AgentJs.scrapeStructured(itemSelector, fields)))
+                return runCatching {
+                    val arr = org.json.JSONArray(raw)
+                    (0 until arr.length()).map { i ->
+                        val o = arr.getJSONObject(i)
+                        o.keys().asSequence().associateWith { k -> o.optString(k) }
+                    }
+                }.getOrDefault(emptyList())
+            }
+
             override suspend fun runJs(code: String): String {
                 val wv = webView ?: return "No page is currently loaded."
                 if (code.isBlank()) return "No code provided."
@@ -1055,6 +1068,38 @@ fun BrowserScreen(
                 }
             }
 
+            override suspend fun findApiRequests(filter: String?): List<String> {
+                val all = com.akay.feature.browser.devconsole.NetworkInterceptor.requests.value
+                val apiOnly = all.filter { it.isApiLike }
+                val matched = if (filter.isNullOrBlank()) apiOnly else apiOnly.filter { it.url.contains(filter, ignoreCase = true) }
+                return matched.takeLast(30).map { req ->
+                    "${req.method} ${req.url} \u2192 ${req.responseStatus ?: "?"} ${req.mimeType ?: ""}".trim()
+                }
+            }
+
+            override suspend fun getCurlForRequest(urlFilter: String, sanitized: Boolean): String? {
+                val all = com.akay.feature.browser.devconsole.NetworkInterceptor.requests.value
+                val match = all.lastOrNull { it.url.contains(urlFilter, ignoreCase = true) } ?: return null
+                val cookie = runCatching { CookieManager.getInstance().getCookie(match.url) }.getOrNull()
+                val extra = if (!cookie.isNullOrBlank() && match.requestHeaders.keys.none { it.equals("cookie", ignoreCase = true) }) {
+                    mapOf("Cookie" to cookie)
+                } else emptyMap()
+                val curl = match.toCurl(extra, sanitize = sanitized)
+                val authNote = match.authHeaderNames
+                if (authNote.isNotEmpty() && !sanitized) {
+                    return "$curl\n\n# NOTE: this request carries auth via: ${authNote.joinToString(", ")} \u2014 " +
+                        "tied to your own logged-in session on this site. Treat it like a password: don't post it " +
+                        "publicly or share it with anyone else."
+                }
+                return curl
+            }
+
+            override suspend fun getResponseBody(urlFilter: String): String? {
+                val all = com.akay.feature.browser.devconsole.NetworkInterceptor.requests.value
+                val match = all.lastOrNull { it.url.contains(urlFilter, ignoreCase = true) && it.responseBody.isNotBlank() } ?: return null
+                return match.responseBody.take(3000)
+            }
+
             override suspend fun getDetectedMedia(): List<String> {
                 return com.akay.feature.browser.devconsole.NetworkInterceptor.detectedMedia.value.map { media ->
                     "${if (media.isVideo) "video" else "audio"}: ${media.filename} \u2192 ${media.url}"
@@ -1065,6 +1110,159 @@ fun BrowserScreen(
                 return viewModel.uiState.value.tabs.map { tab ->
                     "${tab.title.ifBlank { "New tab" }} \u2192 ${tab.url}${if (tab.id == viewModel.uiState.value.activeTab?.id) " (active)" else ""}"
                 }
+            }
+
+            override suspend fun findAuthFlow(): String {
+                val all = com.akay.feature.browser.devconsole.NetworkInterceptor.requests.value
+                if (all.isEmpty()) return "No requests captured yet - browse/log in on the page first."
+
+                // A request "grants" auth if its response sets a cookie, or its JSON body contains
+                // a token-shaped field (access_token, token, jwt, session_id, ...).
+                val tokenFieldNames = listOf("access_token", "token", "jwt", "session_id", "sessionid", "auth_token", "id_token")
+                val grantors = all.filter { req ->
+                    val setsCookie = req.responseHeaders.keys.any { it.equals("set-cookie", ignoreCase = true) }
+                    val bodyHasToken = tokenFieldNames.any { field -> req.responseBody.contains("\"$field\"", ignoreCase = true) }
+                    setsCookie || bodyHasToken
+                }
+                if (grantors.isEmpty()) return "No request in the captured log looks like it granted a session (no Set-Cookie, no token field in a response body)."
+
+                val sb = StringBuilder("Requests that appear to establish the session:\n")
+                grantors.take(5).forEach { g ->
+                    sb.append("- ${g.method} ${g.url} \u2192 ${g.responseStatus ?: "?"}")
+                    if (g.responseHeaders.keys.any { it.equals("set-cookie", ignoreCase = true) }) sb.append(" (sets a cookie)")
+                    val foundField = tokenFieldNames.firstOrNull { g.responseBody.contains("\"$it\"", ignoreCase = true) }
+                    if (foundField != null) sb.append(" (response body contains \"$foundField\")")
+                    sb.append("\n")
+                }
+
+                val dependents = all.filter { req -> req.authHeaderNames.isNotEmpty() }
+                    .distinctBy { it.url.substringBefore('?') }
+                if (dependents.isNotEmpty()) {
+                    sb.append("\nLater requests that then send auth (cookie/token) back:\n")
+                    dependents.take(8).forEach { d ->
+                        sb.append("- ${d.method} ${d.url} \u2192 sends ${d.authHeaderNames.joinToString(", ")}\n")
+                    }
+                }
+                return sb.toString().trim()
+            }
+
+            override suspend fun diffRequests(filterA: String, filterB: String): String {
+                val all = com.akay.feature.browser.devconsole.NetworkInterceptor.requests.value
+                val a = all.lastOrNull { it.url.contains(filterA, ignoreCase = true) }
+                    ?: return "No captured request matched \"$filterA\"."
+                val b = all.lastOrNull { it.url.contains(filterB, ignoreCase = true) && it !== a }
+                    ?: return "No second captured request matched \"$filterB\" (distinct from the first match)."
+
+                fun parseQuery(url: String): Map<String, String> =
+                    runCatching { java.net.URI(url) }.getOrNull()?.query
+                        ?.split("&")?.mapNotNull { p ->
+                            val i = p.indexOf('=')
+                            if (i < 0) null else java.net.URLDecoder.decode(p.substring(0, i), "UTF-8") to java.net.URLDecoder.decode(p.substring(i + 1), "UTF-8")
+                        }?.toMap() ?: emptyMap()
+
+                val qa = parseQuery(a.url); val qb = parseQuery(b.url)
+                val queryDiffKeys = (qa.keys + qb.keys).filter { qa[it] != qb[it] }
+
+                val ha = a.requestHeaders; val hb = b.requestHeaders
+                val headerDiffKeys = (ha.keys + hb.keys).filter { ha[it] != hb[it] }
+
+                val sb = StringBuilder("Comparing:\nA: ${a.method} ${a.url}\nB: ${b.method} ${b.url}\n\n")
+                if (queryDiffKeys.isEmpty()) sb.append("Query params: identical.\n")
+                else {
+                    sb.append("Query params that differ:\n")
+                    queryDiffKeys.forEach { k -> sb.append("  - $k: \"${qa[k] ?: "(absent)"}\" \u2192 \"${qb[k] ?: "(absent)"}\"\n") }
+                }
+                if (headerDiffKeys.isNotEmpty()) {
+                    sb.append("Headers that differ:\n")
+                    headerDiffKeys.forEach { k -> sb.append("  - $k: \"${ha[k] ?: "(absent)"}\" \u2192 \"${hb[k] ?: "(absent)"}\"\n") }
+                }
+                if (a.requestBody != b.requestBody && (a.requestBody.isNotBlank() || b.requestBody.isNotBlank())) {
+                    sb.append("Request body differs (A: ${a.requestBody.take(150)} | B: ${b.requestBody.take(150)})\n")
+                }
+                return sb.toString().trim()
+            }
+
+            override suspend fun inferSchema(urlFilter: String): String {
+                val all = com.akay.feature.browser.devconsole.NetworkInterceptor.requests.value
+                val match = all.lastOrNull { it.url.contains(urlFilter, ignoreCase = true) && it.responseBody.isNotBlank() }
+                    ?: return "No captured response body found matching \"$urlFilter\"."
+                val parsed = runCatching { org.json.JSONTokener(match.responseBody).nextValue() }.getOrNull()
+                    ?: return "Response body for this request isn't valid JSON, can't infer a schema."
+
+                fun typeOf(v: Any?): String = when (v) {
+                    null, org.json.JSONObject.NULL -> "String?"
+                    is String -> "String"
+                    is Boolean -> "Boolean"
+                    is Int, is Long -> "Long"
+                    is Double, is Float -> "Double"
+                    is org.json.JSONArray -> {
+                        val first = if (v.length() > 0) v.get(0) else null
+                        "List<${typeOf(first)}>"
+                    }
+                    is org.json.JSONObject -> "Object"
+                    else -> "Any"
+                }
+
+                fun renderObject(obj: org.json.JSONObject, name: String, sb: StringBuilder, seen: MutableSet<String>) {
+                    if (!seen.add(name)) return
+                    val fields = obj.keys().asSequence().map { k -> k to obj.get(k) }.toList()
+                    sb.append("data class $name(\n")
+                    fields.forEach { (k, v) ->
+                        val t = typeOf(v)
+                        sb.append("    val $k: $t,\n")
+                    }
+                    sb.append(")\n")
+                    fields.forEach { (k, v) ->
+                        if (v is org.json.JSONObject) renderObject(v, k.replaceFirstChar { it.uppercase() }, sb, seen)
+                        if (v is org.json.JSONArray && v.length() > 0 && v.get(0) is org.json.JSONObject) {
+                            renderObject(v.getJSONObject(0), k.replaceFirstChar { it.uppercase() }.removeSuffix("s"), sb, seen)
+                        }
+                    }
+                }
+
+                val sb = StringBuilder()
+                when (parsed) {
+                    is org.json.JSONObject -> renderObject(parsed, "Response", sb, mutableSetOf())
+                    is org.json.JSONArray -> {
+                        if (parsed.length() > 0 && parsed.get(0) is org.json.JSONObject) {
+                            renderObject(parsed.getJSONObject(0), "ResponseItem", sb, mutableSetOf())
+                            sb.insert(0, "// top-level response is a List<ResponseItem>\n")
+                        } else sb.append("// top-level response is a List<${typeOf(if (parsed.length() > 0) parsed.get(0) else null)}>\n")
+                    }
+                    else -> sb.append("// top-level response is a single ${typeOf(parsed)}\n")
+                }
+                return sb.toString().trim()
+            }
+
+            override suspend fun getGraphQlQueries(filter: String?): List<String> {
+                val all = com.akay.feature.browser.devconsole.NetworkInterceptor.requests.value
+                val gql = all.filter { it.isGraphQl }
+                val matched = if (filter.isNullOrBlank()) gql else gql.filter { it.url.contains(filter, ignoreCase = true) }
+                return matched.takeLast(15).map { req ->
+                    val body = runCatching { org.json.JSONObject(req.requestBody) }.getOrNull()
+                    val opName = body?.optString("operationName")?.ifBlank { null }
+                    val query = body?.optString("query")?.trim()
+                    val variables = body?.optJSONObject("variables")?.toString()
+                    buildString {
+                        append("POST ${req.url}")
+                        if (opName != null) append(" \u2192 operation: $opName")
+                        append("\n")
+                        if (query != null) append("query:\n${query.take(1200)}\n")
+                        if (!variables.isNullOrBlank() && variables != "{}") append("variables: $variables\n")
+                    }.trim()
+                }
+            }
+
+            override suspend fun exportHar(): String {
+                val all = com.akay.feature.browser.devconsole.NetworkInterceptor.requests.value
+                if (all.isEmpty()) return "No requests captured yet - nothing to export."
+                return runCatching {
+                    val har = com.akay.feature.browser.devconsole.NetworkInterceptor.toHar()
+                    val dir = java.io.File(context.filesDir, "har_exports").apply { mkdirs() }
+                    val file = java.io.File(dir, "axbrowser_${System.currentTimeMillis()}.har")
+                    file.writeText(har)
+                    "Exported ${all.size} requests to ${file.absolutePath} \u2014 pull it via adb or share it, then open in Chrome DevTools / Postman / Insomnia (File > Import)."
+                }.getOrElse { "Failed to export HAR: ${it.message}" }
             }
         }
     }

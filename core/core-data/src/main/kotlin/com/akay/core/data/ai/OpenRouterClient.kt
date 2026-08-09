@@ -57,14 +57,43 @@ class OpenRouterClient @Inject constructor(
                 okHttpClient.newCall(request).execute().use { response ->
                     val raw = response.body?.string().orEmpty()
                     if (!response.isSuccessful) {
+                        // Always surface something concrete: the API's own error message when it
+                        // parses as JSON, otherwise the raw body itself (truncated) - never just a
+                        // bare status code, since that alone rarely explains WHY it failed (bad key,
+                        // rate limit, model unavailable, moderation, invalid params, ...).
                         val errMsg = runCatching { JSONObject(raw).optJSONObject("error")?.optString("message") }.getOrNull()
-                        error(errMsg ?: "OpenRouter error ${response.code}")
+                            ?.takeIf { it.isNotBlank() }
+                        val bodySnippet = raw.take(500).ifBlank { "(empty response body)" }
+                        error("OpenRouter HTTP ${response.code}: ${errMsg ?: bodySnippet}")
                     }
-                    val json = JSONObject(raw)
-                    val choices = json.optJSONArray("choices") ?: error("Empty response from model")
-                    if (choices.length() == 0) error("Empty response from model")
-                    choices.getJSONObject(0).getJSONObject("message").optString("content").trim()
+                    val json = runCatching { JSONObject(raw) }.getOrElse {
+                        error("OpenRouter returned a non-JSON response (HTTP ${response.code}): ${raw.take(500).ifBlank { "(empty body)" }}")
+                    }
+                    val choices = json.optJSONArray("choices")
+                    if (choices == null || choices.length() == 0) {
+                        // Distinguish "no choices key at all" from "choices was empty" and show the
+                        // raw JSON either way - this used to just say "Empty response from model"
+                        // with no way to tell if it was a moderation block, a truncation, etc.
+                        val errInBody = json.optJSONObject("error")?.optString("message")?.takeIf { it.isNotBlank() }
+                        error(errInBody ?: "OpenRouter returned no choices. Raw response: ${raw.take(500)}")
+                    }
+                    val message = choices.getJSONObject(0).optJSONObject("message")
+                        ?: error("OpenRouter response was missing a message object. Raw response: ${raw.take(500)}")
+                    val content = message.optString("content").trim()
+                    if (content.isBlank()) {
+                        val finishReason = choices.getJSONObject(0).optString("finish_reason").ifBlank { "unknown" }
+                        error("Model returned an empty message (finish_reason: $finishReason). Raw response: ${raw.take(500)}")
+                    }
+                    content
                 }
+            }.recoverCatching { throwable ->
+                // Give network/IO failures (timeout, no connection, DNS, TLS, ...) a clearer label
+                // too, since okhttp exception messages alone (e.g. "timeout") are easy to misread as
+                // "the model" failing rather than the network call itself.
+                if (throwable.message?.startsWith("OpenRouter") == true || throwable.message?.startsWith("Model returned") == true) {
+                    throw throwable
+                }
+                throw IllegalStateException("Network error contacting OpenRouter (${throwable::class.simpleName}): ${throwable.message ?: "no details"}", throwable)
             }
         }
 

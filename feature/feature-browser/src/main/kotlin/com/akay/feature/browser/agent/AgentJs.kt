@@ -62,6 +62,45 @@ object AgentJs {
         """.trimIndent()
     }
 
+    /**
+     * Reverse-engineers a repeated listing (product cards, search results, table rows, ...) into
+     * structured JSON records in one shot, instead of the agent scraping one field at a time.
+     * [itemSelector] matches each repeated container; each entry in [fields] is fieldName -> a
+     * selector *relative to the container*, optionally suffixed "@attr" to pull an attribute
+     * (e.g. "a.title@href", "img@src") instead of text content.
+     */
+    fun scrapeStructured(itemSelector: String, fields: Map<String, String>): String {
+        val escapedContainer = itemSelector.replace("\\", "\\\\").replace("'", "\\'")
+        val fieldsJs = fields.entries.joinToString(",\n") { (name, sel) ->
+            val (rawSel, attr) = if (sel.contains("@")) sel.substringBeforeLast("@") to sel.substringAfterLast("@") else sel to null
+            val escSel = rawSel.replace("\\", "\\\\").replace("'", "\\'")
+            val nameJson = org.json.JSONObject.quote(name)
+            if (attr != null) {
+                val escAttr = attr.replace("\\", "\\\\").replace("'", "\\'")
+                "$nameJson: (function(scope){ var e = scope.querySelector('$escSel'); return e ? (e.getAttribute('$escAttr')||'') : ''; })(item)"
+            } else {
+                "$nameJson: (function(scope){ var e = scope.querySelector('$escSel'); return e ? (e.innerText||e.textContent||'').trim().replace(/\\s+/g,' ') : ''; })(item)"
+            }
+        }
+        return """
+            (function() {
+                try {
+                    var items = Array.prototype.slice.call(document.querySelectorAll('$escapedContainer'));
+                    var out = [];
+                    for (var i = 0; i < items.length && out.length < 40; i++) {
+                        var item = items[i];
+                        out.push({
+                            $fieldsJs
+                        });
+                    }
+                    return JSON.stringify(out);
+                } catch (e) {
+                    return JSON.stringify([{ error: 'JS Error: ' + e }]);
+                }
+            })();
+        """.trimIndent()
+    }
+
     /** Runs an arbitrary JS expression/statement block and stringifies whatever it evaluates to. */
     fun runJs(code: String): String {
         // The code is executed as-is inside a function body so both bare

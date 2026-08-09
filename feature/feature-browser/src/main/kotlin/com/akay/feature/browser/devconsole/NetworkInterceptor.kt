@@ -1,5 +1,7 @@
 package com.akay.feature.browser.devconsole
 
+import org.json.JSONArray
+import org.json.JSONObject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -35,13 +37,63 @@ data class NetworkRequest(
                 || mediaTypes.any { contentType.contains(it) }
         }
 
-    /** Builds a runnable curl command reproducing this request. */
-    fun toCurl(): String {
+    /**
+     * Heuristic for "this looks like a backend API call, not a static asset" - JSON/XHR/fetch
+     * traffic, GraphQL, REST-ish paths. Used by the agent to separate the actual data endpoints
+     * from images/css/js/fonts noise when the user asks "what API does this site use".
+     */
+    val isApiLike: Boolean
+        get() {
+            if (isMedia) return false
+            val lowerUrl = url.lowercase()
+            val contentType = mimeType?.lowercase() ?: ""
+            val staticExts = listOf(".css", ".js", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".woff", ".woff2", ".ttf", ".ico")
+            if (staticExts.any { lowerUrl.substringBefore('?').endsWith(it) }) return false
+
+            val apiSignals = listOf("application/json", "application/graphql", "application/ld+json")
+            val pathSignals = listOf("/api/", "/graphql", "/v1/", "/v2/", "/v3/", ".json", "/rest/", "/gql")
+            return source != "webview"
+                || apiSignals.any { contentType.contains(it) }
+                || pathSignals.any { lowerUrl.contains(it) }
+                || !method.equals("GET", ignoreCase = true)
+        }
+
+    /** True for GraphQL calls - a POST whose body is `{"query": ...}`/`{"operationName": ...}`
+     *  or whose URL contains /graphql. These need separate handling from REST since the "real"
+     *  endpoint is opaque (one URL for everything) and the actual API surface is inside the body. */
+    val isGraphQl: Boolean
+        get() = url.lowercase().let { it.contains("/graphql") || it.contains("/gql") } ||
+            (requestBody.trimStart().startsWith("{") &&
+                (requestBody.contains("\"query\"") || requestBody.contains("\"operationName\"")))
+
+    /** Names of headers on this request that look like they carry auth/session state, so the
+     *  agent (and the sanitized curl variant) can call them out instead of treating every header
+     *  the same way. Covers cookie-based sessions, bearer/JWT tokens, and common API-key headers. */
+    val authHeaderNames: List<String>
+        get() {
+            val authLike = setOf(
+                "cookie", "authorization", "x-api-key", "api-key", "x-auth-token",
+                "x-access-token", "x-csrf-token", "x-xsrf-token", "x-session-token", "x-auth"
+            )
+            return requestHeaders.keys.filter { it.lowercase() in authLike }
+        }
+
+    /** Builds a runnable curl command reproducing this request. [extraHeaders] (e.g. Cookie
+     *  pulled from CookieManager when the page never set it via JS) are merged in without
+     *  overriding anything already captured on the request itself. When [sanitize] is true,
+     *  auth-looking header values (see [authHeaderNames]) are replaced with placeholders so the
+     *  command is safe to paste into a bug report/doc instead of leaking the user's live session. */
+    fun toCurl(extraHeaders: Map<String, String> = emptyMap(), sanitize: Boolean = false): String {
         val sb = StringBuilder("curl")
         if (!method.equals("GET", ignoreCase = true)) sb.append(" -X ").append(method)
         sb.append(" '").append(url).append("'")
-        requestHeaders.forEach { (k, v) ->
-            sb.append(" \\\n  -H '").append(k).append(": ").append(v.replace("'", "'\\''")).append("'")
+        val merged = LinkedHashMap<String, String>()
+        requestHeaders.forEach { (k, v) -> merged[k] = v }
+        extraHeaders.forEach { (k, v) -> merged.putIfAbsent(k, v) }
+        val authLower = authHeaderNames.map { it.lowercase() }.toSet()
+        merged.forEach { (k, v) ->
+            val value = if (sanitize && k.lowercase() in authLower) "<REDACTED>" else v
+            sb.append(" \\\n  -H '").append(k).append(": ").append(value.replace("'", "'\\''")).append("'")
         }
         if (requestBody.isNotBlank()) {
             sb.append(" \\\n  --data-raw '").append(requestBody.replace("'", "'\\''")).append("'")
@@ -49,6 +101,15 @@ data class NetworkRequest(
         return sb.toString()
     }
 }
+
+data class WebSocketFrame(
+    val id: String = UUID.randomUUID().toString(),
+    val url: String,
+    /** open | send | recv | close */
+    val direction: String,
+    val message: String,
+    val timestamp: Long = System.currentTimeMillis()
+)
 
 data class DetectedMedia(
     val id: String = UUID.randomUUID().toString(),
@@ -69,7 +130,11 @@ object NetworkInterceptor {
     private val _rules = MutableStateFlow<List<InterceptorRule>>(emptyList())
     val rules: StateFlow<List<InterceptorRule>> = _rules.asStateFlow()
 
+    private val _webSocketFrames = MutableStateFlow<List<WebSocketFrame>>(emptyList())
+    val webSocketFrames: StateFlow<List<WebSocketFrame>> = _webSocketFrames.asStateFlow()
+
     private const val MAX_ENTRIES = 500
+    private const val MAX_WS_FRAMES = 300
     private val seenMediaUrls = mutableSetOf<String>()
 
     fun onRequest(request: NetworkRequest) {
@@ -80,22 +145,39 @@ object NetworkInterceptor {
         maybeAddMedia(request.url, request.mimeType)
     }
 
-    /** Feeds a request/response captured by the in-page JS bridge (fetch/XHR). */
+    /** Feeds a request/response captured by the in-page JS bridge (fetch/XHR/WebSocket).
+     *  [requestHeaders] are headers the page itself attached (Authorization, X-Api-Key, custom
+     *  session headers, ...) - required for get_curl to reproduce header-based auth, not just
+     *  cookies. [wsDirection] is set only for source == "websocket" frames (open/send/recv/close)
+     *  and those are routed to the separate WebSocket log instead of the request table, since
+     *  they aren't request/response pairs. */
     fun onCapturedRequest(
         url: String,
         method: String,
         status: Int?,
         requestBody: String,
+        requestHeaders: Map<String, String> = emptyMap(),
         responseBody: String,
         responseHeaders: Map<String, String>,
         mimeType: String?,
         durationMs: Long,
-        source: String
+        source: String,
+        wsDirection: String? = null
     ) {
+        if (source == "websocket") {
+            val direction = wsDirection ?: "recv"
+            val message = if (direction == "send") requestBody else responseBody
+            _webSocketFrames.update { current ->
+                val updated = current + WebSocketFrame(url = url, direction = direction, message = message)
+                if (updated.size > MAX_WS_FRAMES) updated.drop(updated.size - MAX_WS_FRAMES) else updated
+            }
+            return
+        }
         val req = NetworkRequest(
             url = url,
             method = method,
             responseStatus = status,
+            requestHeaders = requestHeaders,
             responseHeaders = responseHeaders,
             mimeType = mimeType,
             durationMs = durationMs,
@@ -108,6 +190,64 @@ object NetworkInterceptor {
             if (updated.size > MAX_ENTRIES) updated.drop(updated.size - MAX_ENTRIES) else updated
         }
         maybeAddMedia(url, mimeType)
+    }
+
+    /** Minimal HAR 1.2 export of everything captured so far, for loading into Charles/Postman/
+     *  Insomnia/browser DevTools instead of copy-pasting individual curl commands one at a time. */
+    fun toHar(): String {
+        val entries = _requests.value.map { req ->
+            JSONObject().apply {
+                put("startedDateTime", java.time.Instant.ofEpochMilli(req.startTime).toString())
+                put("time", req.durationMs)
+                put("request", JSONObject().apply {
+                    put("method", req.method)
+                    put("url", req.url)
+                    put("httpVersion", "HTTP/1.1")
+                    put("headers", JSONArray(req.requestHeaders.map {
+                        JSONObject().put("name", it.key).put("value", it.value)
+                    }))
+                    put("queryString", JSONArray())
+                    put("cookies", JSONArray())
+                    put("headersSize", -1)
+                    put("bodySize", req.requestBody.toByteArray().size)
+                    if (req.requestBody.isNotBlank()) {
+                        put("postData", JSONObject().apply {
+                            put("mimeType", req.requestHeaders.entries.firstOrNull { it.key.equals("content-type", true) }?.value ?: "text/plain")
+                            put("text", req.requestBody)
+                        })
+                    }
+                })
+                put("response", JSONObject().apply {
+                    put("status", req.responseStatus ?: 0)
+                    put("statusText", "")
+                    put("httpVersion", "HTTP/1.1")
+                    put("headers", JSONArray(req.responseHeaders.map {
+                        JSONObject().put("name", it.key).put("value", it.value)
+                    }))
+                    put("cookies", JSONArray())
+                    put("content", JSONObject().apply {
+                        put("size", req.responseBody.toByteArray().size)
+                        put("mimeType", req.mimeType ?: "")
+                        put("text", req.responseBody)
+                    })
+                    put("redirectURL", "")
+                    put("headersSize", -1)
+                    put("bodySize", req.sizeBytes)
+                })
+                put("cache", JSONObject())
+                put("timings", JSONObject().apply {
+                    put("send", 0); put("wait", req.durationMs); put("receive", 0)
+                })
+            }
+        }
+        val har = JSONObject().apply {
+            put("log", JSONObject().apply {
+                put("version", "1.2")
+                put("creator", JSONObject().put("name", "AxBrowser").put("version", "1.0"))
+                put("entries", JSONArray(entries))
+            })
+        }
+        return har.toString(2)
     }
 
     private fun maybeAddMedia(url: String, mimeType: String?) {
@@ -153,6 +293,7 @@ object NetworkInterceptor {
 
     fun clear() {
         _requests.value = emptyList()
+        _webSocketFrames.value = emptyList()
         clearDetectedMedia()
     }
 
