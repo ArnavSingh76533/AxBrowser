@@ -169,17 +169,21 @@ private fun AgentTurnView(turn: AgentTurn) {
             Spacer(Modifier.height(6.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
                 if (turn.finalText != null) {
+                    val bubbleContentColor = if (turn.isError) MaterialTheme.colorScheme.onErrorContainer else LocalContentColor.current
                     Surface(
                         shape = RoundedCornerShape(14.dp),
                         color = if (turn.isError) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceVariant,
-                        modifier = Modifier.widthIn(max = 280.dp)
+                        modifier = Modifier.fillMaxWidth(0.92f)
                     ) {
-                        Text(
-                            turn.finalText.orEmpty(),
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (turn.isError) MaterialTheme.colorScheme.onErrorContainer else LocalContentColor.current
-                        )
+                        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                CopyIconButton(textToCopy = turn.finalText.orEmpty(), tint = bubbleContentColor)
+                            }
+                            AgentMarkdown(text = turn.finalText.orEmpty(), contentColor = bubbleContentColor)
+                        }
                     }
                 } else {
                     Row(verticalAlignment = Alignment.CenterVertically) {
