@@ -1079,19 +1079,34 @@ fun BrowserScreen(
 
             override suspend fun getCurlForRequest(urlFilter: String, sanitized: Boolean): String? {
                 val all = com.akay.feature.browser.devconsole.NetworkInterceptor.requests.value
-                val match = all.lastOrNull { it.url.contains(urlFilter, ignoreCase = true) } ?: return null
+                val candidates = all.filter { it.url.contains(urlFilter, ignoreCase = true) }
+                if (candidates.isEmpty()) return null
+                // Prefer the most recent match that actually carries a body for methods that are
+                // expected to have one (POST/PUT/PATCH/DELETE) - a body-less entry for those methods
+                // means only the pre-response placeholder was captured (Android's WebView API can't
+                // read POST bodies natively; the real payload comes from the JS fetch/XHR bridge a
+                // moment later). Falling back to plain lastOrNull only when nothing better exists
+                // keeps GET requests (which legitimately have no body) working exactly as before.
+                val match = candidates.lastOrNull { req ->
+                    req.method.equals("GET", ignoreCase = true) || req.requestBody.isNotBlank()
+                } ?: candidates.last()
                 val cookie = runCatching { CookieManager.getInstance().getCookie(match.url) }.getOrNull()
                 val extra = if (!cookie.isNullOrBlank() && match.requestHeaders.keys.none { it.equals("cookie", ignoreCase = true) }) {
                     mapOf("Cookie" to cookie)
                 } else emptyMap()
                 val curl = match.toCurl(extra, sanitize = sanitized)
                 val authNote = match.authHeaderNames
+                val bodyNote = if (!match.method.equals("GET", ignoreCase = true) && match.requestBody.isBlank()) {
+                    "\n\n# NOTE: no request body was captured for this call. If this was a POST/PUT made via a plain " +
+                        "HTML <form> submit (not JS fetch/XHR), the browser has no API to read that body - only " +
+                        "JS-driven requests can be captured with their payload."
+                } else ""
                 if (authNote.isNotEmpty() && !sanitized) {
                     return "$curl\n\n# NOTE: this request carries auth via: ${authNote.joinToString(", ")} \u2014 " +
                         "tied to your own logged-in session on this site. Treat it like a password: don't post it " +
-                        "publicly or share it with anyone else."
+                        "publicly or share it with anyone else.$bodyNote"
                 }
-                return curl
+                return curl + bodyNote
             }
 
             override suspend fun getResponseBody(urlFilter: String): String? {

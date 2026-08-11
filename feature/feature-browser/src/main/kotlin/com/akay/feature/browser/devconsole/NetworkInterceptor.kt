@@ -139,6 +139,17 @@ object NetworkInterceptor {
 
     fun onRequest(request: NetworkRequest) {
         _requests.update { current ->
+            // If the JS bridge already captured this exact request (same URL+method) with a real
+            // body/headers very recently, don't add a second, emptier entry for it - Android's
+            // WebResourceRequest has no API to read POST bodies, so the native intercept is always
+            // body-less; keeping both around let get_curl/find_api_requests randomly land on the
+            // useless one instead of the one with the actual payload.
+            val recentJsTwin = current.lastOrNull {
+                it.url == request.url && it.method.equals(request.method, ignoreCase = true) &&
+                    it.source != "webview" && it.requestBody.isNotBlank() &&
+                    request.startTime - it.startTime in 0..5000
+            }
+            if (recentJsTwin != null) return@update current
             val updated = current + request
             if (updated.size > MAX_ENTRIES) updated.drop(updated.size - MAX_ENTRIES) else updated
         }
@@ -186,8 +197,24 @@ object NetworkInterceptor {
             source = source
         )
         _requests.update { current ->
-            val updated = current + req
-            if (updated.size > MAX_ENTRIES) updated.drop(updated.size - MAX_ENTRIES) else updated
+            // The native WebViewClient intercept (source == "webview") already logged this exact
+            // request when it started, but Android gives it no way to read the POST body - it's
+            // always blank there. This JS-bridge callback is the one call site that actually has
+            // the real body/headers (fetch/XHR capture in net_capture.js). Update that earlier
+            // placeholder entry IN PLACE instead of appending a second record for the same call,
+            // so get_curl/get_network_requests/export_har only ever see ONE entry per request -
+            // and it's always the complete one, never a coin-flip between the two.
+            val placeholderIdx = current.indexOfLast {
+                it.url == url && it.method.equals(method, ignoreCase = true) &&
+                    it.source == "webview" && it.requestBody.isBlank() &&
+                    System.currentTimeMillis() - it.startTime in 0..15000
+            }
+            if (placeholderIdx >= 0) {
+                current.toMutableList().also { it[placeholderIdx] = req.copy(startTime = current[placeholderIdx].startTime) }
+            } else {
+                val updated = current + req
+                if (updated.size > MAX_ENTRIES) updated.drop(updated.size - MAX_ENTRIES) else updated
+            }
         }
         maybeAddMedia(url, mimeType)
     }

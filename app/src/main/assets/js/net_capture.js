@@ -214,4 +214,30 @@
         window.WebSocket.CLOSING = OrigWebSocket.CLOSING;
         window.WebSocket.CLOSED = OrigWebSocket.CLOSED;
     }
+
+    // --- native <form> submissions ---
+    // A plain HTML form (method="post", no JS) never touches fetch/XHR at all, so the hooks
+    // above never see it - and Android's WebView gives shouldInterceptRequest no way to read a
+    // POST body either. This is the one case we CAN still capture: read the form's fields here,
+    // before the browser hands off to its native submit, and log them as the request body so
+    // get_curl isn't left with an empty payload for login forms and the like.
+    document.addEventListener('submit', function (evt) {
+        try {
+            var form = evt.target;
+            if (!form || form.tagName !== 'FORM') return;
+            var method = (form.getAttribute('method') || 'GET').toUpperCase();
+            var action = form.getAttribute('action') || location.href;
+            var url = new URL(action, location.href).toString();
+            var fd = new FormData(form);
+            var parts = [];
+            fd.forEach(function (v, k) {
+                parts.push(encodeURIComponent(k) + '=' + encodeURIComponent(typeof v === 'string' ? v : '[file: ' + (v && v.name) + ']'));
+            });
+            post({
+                source: 'form-submit', url: url, method: method, status: null,
+                reqBody: trunc(parts.join('&')), reqHeaders: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                respBody: '', respHeaders: {}, durationMs: 0, type: 'application/x-www-form-urlencoded'
+            });
+        } catch (e) {}
+    }, true);
 })();

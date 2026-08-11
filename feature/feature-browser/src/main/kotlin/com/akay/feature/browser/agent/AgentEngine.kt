@@ -140,6 +140,13 @@ class AgentEngine(
             userGoal
         }
         history += ChatTurn("user", contextualGoal)
+        // Verbatim get_curl results captured this run (unsanitized only - sanitized ones are
+        // *meant* to have placeholders). Small free models frequently "helpfully" retype a
+        // captured curl with the cookie/token swapped for something like <YOUR_TOKEN> even when
+        // told explicitly not to, because it pattern-matches as a secret worth redacting. Since
+        // we already have the exact right string from the tool call itself, the fix isn't to
+        // trust the model's transcription - it's to splice the real one back in below.
+        val realCurlBlocks = mutableListOf<String>()
         repeat(maxSteps) { step ->
             val result = client.chat(apiKey, model, history)
             val raw = result.getOrElse {
@@ -187,16 +194,38 @@ class AgentEngine(
             val input = json.optJSONObject("action_input") ?: JSONObject()
 
             if (action == "final_answer") {
-                onEvent(AgentEvent.FinalAnswer(input.optString("text").ifBlank { thought }))
+                val modelText = input.optString("text").ifBlank { thought }
+                val finalText = if (realCurlBlocks.isEmpty()) modelText else injectRealCurl(modelText, realCurlBlocks)
+                onEvent(AgentEvent.FinalAnswer(finalText))
                 return
             }
 
             onEvent(AgentEvent.ToolCall(action, input.toString()))
             val observation = runCatching { execute(action, input) }.getOrElse { "Error: ${it.message}" }
+            if (action == "get_curl" && !input.optBoolean("sanitized", false) && observation.startsWith("curl")) {
+                realCurlBlocks += observation
+            }
             onEvent(AgentEvent.ToolResult(observation))
             history += ChatTurn("user", "Observation: $observation")
         }
         onEvent(AgentEvent.Error("Stopped after $maxSteps steps without a final answer."))
+    }
+
+    /** Replaces whatever code block(s) the model wrote with the real, verbatim get_curl
+     *  output(s) from this run - guaranteeing the user always gets a runnable command with the
+     *  actual captured cookie/token/session values, never a model-invented `<YOUR_TOKEN>`
+     *  placeholder, regardless of how faithfully the underlying model transcribed it. Only
+     *  applies to unsanitized get_curl results; sanitized ones are supposed to have placeholders. */
+    private fun injectRealCurl(modelText: String, realCurlBlocks: List<String>): String {
+        val alreadyVerbatim = realCurlBlocks.all { modelText.contains(it) }
+        if (alreadyVerbatim) return modelText
+        val withoutCodeFences = modelText.replace(Regex("```[a-zA-Z]*\\n[\\s\\S]*?```"), "").trimEnd()
+        val curlSection = realCurlBlocks.joinToString("\n\n") { "```bash\n$it\n```" }
+        return buildString {
+            append(withoutCodeFences)
+            if (withoutCodeFences.isNotBlank()) append("\n\n")
+            append(curlSection)
+        }
     }
 
     private suspend fun execute(action: String, input: JSONObject): String = when (action) {
