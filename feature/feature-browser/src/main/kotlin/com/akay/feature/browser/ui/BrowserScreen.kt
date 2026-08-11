@@ -1068,18 +1068,25 @@ fun BrowserScreen(
                 }
             }
 
-            override suspend fun findApiRequests(filter: String?): List<String> {
+            override suspend fun findApiRequests(filter: String?, method: String?): List<String> {
                 val all = com.akay.feature.browser.devconsole.NetworkInterceptor.requests.value
                 val apiOnly = all.filter { it.isApiLike }
-                val matched = if (filter.isNullOrBlank()) apiOnly else apiOnly.filter { it.url.contains(filter, ignoreCase = true) }
+                val matched = apiOnly
+                    .let { if (filter.isNullOrBlank()) it else it.filter { r -> r.url.contains(filter, ignoreCase = true) } }
+                    .let { if (method.isNullOrBlank()) it else it.filter { r -> r.method.equals(method, ignoreCase = true) } }
                 return matched.takeLast(30).map { req ->
                     "${req.method} ${req.url} \u2192 ${req.responseStatus ?: "?"} ${req.mimeType ?: ""}".trim()
                 }
             }
 
-            override suspend fun getCurlForRequest(urlFilter: String, sanitized: Boolean): String? {
+            override suspend fun getCurlForRequest(urlFilter: String, sanitized: Boolean, method: String?): String? {
                 val all = com.akay.feature.browser.devconsole.NetworkInterceptor.requests.value
-                val candidates = all.filter { it.url.contains(urlFilter, ignoreCase = true) }
+                val candidates = all
+                    .filter { it.url.contains(urlFilter, ignoreCase = true) }
+                    .let { if (method.isNullOrBlank()) it else it.filter { r -> r.method.equals(method, ignoreCase = true) } }
+                    // OPTIONS preflight is never the request the user actually wants - drop it
+                    // unless it's literally the only thing that matched (still better than nothing).
+                    .let { list -> list.filterNot { it.isPreflight }.ifEmpty { list } }
                 if (candidates.isEmpty()) return null
                 // Prefer the most recent match that actually carries a body for methods that are
                 // expected to have one (POST/PUT/PATCH/DELETE) - a body-less entry for those methods

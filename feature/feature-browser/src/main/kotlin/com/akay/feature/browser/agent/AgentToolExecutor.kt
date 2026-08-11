@@ -28,14 +28,18 @@ interface AgentToolExecutor {
     /** Dev-console network log: requests the page has made, optionally filtered by a URL substring. */
     suspend fun getNetworkRequests(filter: String?): List<String>
 
-    /** Same network log, narrowed to requests that look like backend/API calls rather than static assets (css/js/img/fonts). */
-    suspend fun findApiRequests(filter: String?): List<String>
+    /** Same network log, narrowed to requests that look like backend/API calls rather than static assets
+     *  (css/js/img/fonts). CORS preflight (OPTIONS) requests are always excluded - they're never the real
+     *  call. [method] optionally narrows to one HTTP method (e.g. "POST") when a URL matches several. */
+    suspend fun findApiRequests(filter: String?, method: String? = null): List<String>
 
     /** Builds a full runnable curl command (method, URL, headers incl. cookies, body) for the best-matching
      *  captured request, so the agent can hand the user a request they can replay outside the app.
+     *  [method] optionally narrows to one HTTP method when a URL filter matches several requests (e.g. a
+     *  path that has both a GET and a POST, or a real POST alongside its OPTIONS preflight).
      *  [sanitized] swaps auth-looking header values (cookie/bearer/api-key/csrf) for a placeholder -
      *  for when the user wants to share/document the request rather than actually run it themselves. */
-    suspend fun getCurlForRequest(urlFilter: String, sanitized: Boolean = false): String?
+    suspend fun getCurlForRequest(urlFilter: String, sanitized: Boolean = false, method: String? = null): String?
 
     /** The captured response body for the best-matching request (truncated), to inspect an API's payload shape. */
     suspend fun getResponseBody(urlFilter: String): String?

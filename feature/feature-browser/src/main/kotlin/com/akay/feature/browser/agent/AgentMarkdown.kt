@@ -125,6 +125,33 @@ fun CopyIconButton(textToCopy: String, tint: Color) {
     }
 }
 
+/** Lightly colors curl/bash flags (-X, -H, --data-raw...), the leading command word, and quoted
+ *  string arguments, so a long multi-line curl command is actually scannable instead of one wall
+ *  of uniform monospace text. Falls back to plain text for anything else. */
+private fun highlightShell(code: String, language: String?): AnnotatedString {
+    val isShell = language.isNullOrBlank() || language.lowercase() in setOf("bash", "sh", "shell", "curl", "zsh")
+    if (!isShell) return AnnotatedString(code)
+    return buildAnnotatedString {
+        val flagColor = Color(0xFF7EC7FF)
+        val stringColor = Color(0xFFC3E88D)
+        val cmdColor = Color(0xFFFFB86C)
+        val pattern = Regex("(^|\\s)(curl)(?=\\s|$)|(--[a-zA-Z-]+|(?<=\\s)-[a-zA-Z](?=\\s|$))|('[^']*'|\"[^\"]*\")")
+        var last = 0
+        for (m in pattern.findAll(code)) {
+            if (m.range.first > last) append(code.substring(last, m.range.first))
+            val g = m.value
+            when {
+                g.trim() == "curl" -> withStyle(SpanStyle(color = cmdColor, fontWeight = FontWeight.Bold)) { append(g) }
+                g.startsWith("--") || (g.startsWith("-") && g.length == 2) -> withStyle(SpanStyle(color = flagColor)) { append(g) }
+                g.startsWith("'") || g.startsWith("\"") -> withStyle(SpanStyle(color = stringColor)) { append(g) }
+                else -> append(g)
+            }
+            last = m.range.last + 1
+        }
+        if (last < code.length) append(code.substring(last))
+    }
+}
+
 @Composable
 private fun CodeBlockView(block: MdBlock.Code) {
     Surface(
@@ -149,7 +176,7 @@ private fun CodeBlockView(block: MdBlock.Code) {
             }
             SelectionContainer {
                 Text(
-                    text = block.code,
+                    text = highlightShell(block.code, block.language),
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState())

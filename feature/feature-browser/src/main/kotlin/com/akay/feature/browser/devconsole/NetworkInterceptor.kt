@@ -37,6 +37,13 @@ data class NetworkRequest(
                 || mediaTypes.any { contentType.contains(it) }
         }
 
+    /** True for CORS preflight requests - the browser's own OPTIONS check before the real
+     *  request, always empty-bodied and never carrying the actual payload/auth the user wants.
+     *  Excluded from [isApiLike] so the agent doesn't have to (weak models otherwise regularly
+     *  grab the empty preflight instead of the real POST when both match a URL filter). */
+    val isPreflight: Boolean
+        get() = method.equals("OPTIONS", ignoreCase = true)
+
     /**
      * Heuristic for "this looks like a backend API call, not a static asset" - JSON/XHR/fetch
      * traffic, GraphQL, REST-ish paths. Used by the agent to separate the actual data endpoints
@@ -44,7 +51,7 @@ data class NetworkRequest(
      */
     val isApiLike: Boolean
         get() {
-            if (isMedia) return false
+            if (isMedia || isPreflight) return false
             val lowerUrl = url.lowercase()
             val contentType = mimeType?.lowercase() ?: ""
             val staticExts = listOf(".css", ".js", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".woff", ".woff2", ".ttf", ".ico")
@@ -82,24 +89,38 @@ data class NetworkRequest(
      *  pulled from CookieManager when the page never set it via JS) are merged in without
      *  overriding anything already captured on the request itself. When [sanitize] is true,
      *  auth-looking header values (see [authHeaderNames]) are replaced with placeholders so the
-     *  command is safe to paste into a bug report/doc instead of leaking the user's live session. */
+     *  command is safe to paste into a bug report/doc instead of leaking the user's live session.
+     *  JSON bodies are pretty-printed (multi-line inside the single-quoted --data-raw value,
+     *  which bash preserves fine) instead of dumped as one dense line, and a Content-Type header
+     *  is added automatically if the page set one implicitly (e.g. fetch() with a plain object
+     *  body) but it never made it into the captured headers. */
     fun toCurl(extraHeaders: Map<String, String> = emptyMap(), sanitize: Boolean = false): String {
-        val sb = StringBuilder("curl")
+        val sb = StringBuilder("curl --compressed")
         if (!method.equals("GET", ignoreCase = true)) sb.append(" -X ").append(method)
         sb.append(" '").append(url).append("'")
         val merged = LinkedHashMap<String, String>()
         requestHeaders.forEach { (k, v) -> merged[k] = v }
         extraHeaders.forEach { (k, v) -> merged.putIfAbsent(k, v) }
+        val looksLikeJson = requestBody.trimStart().let { it.startsWith("{") || it.startsWith("[") }
+        if (looksLikeJson && merged.keys.none { it.equals("content-type", ignoreCase = true) }) {
+            merged["Content-Type"] = "application/json"
+        }
         val authLower = authHeaderNames.map { it.lowercase() }.toSet()
         merged.forEach { (k, v) ->
             val value = if (sanitize && k.lowercase() in authLower) "<REDACTED>" else v
             sb.append(" \\\n  -H '").append(k).append(": ").append(value.replace("'", "'\\''")).append("'")
         }
         if (requestBody.isNotBlank()) {
-            sb.append(" \\\n  --data-raw '").append(requestBody.replace("'", "'\\''")).append("'")
+            val bodyForCurl = if (looksLikeJson) prettyJsonOrRaw(requestBody) else requestBody
+            sb.append(" \\\n  --data-raw '").append(bodyForCurl.replace("'", "'\\''")).append("'")
         }
         return sb.toString()
     }
+
+    private fun prettyJsonOrRaw(body: String): String = runCatching {
+        val trimmed = body.trimStart()
+        if (trimmed.startsWith("[")) JSONArray(body).toString(2) else JSONObject(body).toString(2)
+    }.getOrDefault(body)
 }
 
 data class WebSocketFrame(

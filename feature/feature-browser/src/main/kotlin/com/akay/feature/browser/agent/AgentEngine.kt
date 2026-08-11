@@ -52,18 +52,22 @@ class AgentEngine(
         - get_network_requests: {"filter": "optional substring to match in the URL, e.g. 'm3u8' or 'api/video'"}
           - lists ALL requests the page has actually made (method, url, status, mime type, size) - like the dev
             console's network tab, including static assets (css/js/images/fonts).
-        - find_api_requests: {"filter": "optional substring to match in the URL"}
+        - find_api_requests: {"filter": "optional substring to match in the URL", "method": "optional HTTP method to narrow to, e.g. 'POST'"}
           - like get_network_requests but pre-filtered to requests that look like actual backend/data calls
-            (JSON/XHR/fetch/GraphQL/non-GET), with static assets stripped out. This is the right first move
-            whenever the user asks what API/endpoint a site uses, or asks you to find "the request" behind
-            some data on the page.
+            (JSON/XHR/fetch/GraphQL/non-GET), with static assets AND CORS preflight (OPTIONS) requests
+            stripped out - OPTIONS is never the real call, it's always an empty-bodied browser-generated
+            check that happens right before the actual request. This is the right first move whenever the
+            user asks what API/endpoint a site uses, or asks you to find "the request" behind some data on
+            the page. Pass "method" when a URL has more than one (e.g. both GET and POST to the same path).
         - get_response_body: {"url_filter": "substring identifying the request, from get_network_requests/find_api_requests"}
           - returns the captured response body (truncated) for that request, to inspect the shape of an API's
             JSON payload before explaining or reproducing it.
-        - get_curl: {"url_filter": "substring identifying the request, from get_network_requests/find_api_requests", "sanitized": false}
+        - get_curl: {"url_filter": "substring identifying the request, from get_network_requests/find_api_requests", "sanitized": false, "method": "optional HTTP method, e.g. 'POST', to disambiguate when the URL filter matches more than one request"}
           - returns a complete, ready-to-run curl command for that exact request: correct method, full headers
             (including session cookies AND any Authorization/API-key/custom auth headers the page itself set,
-            plus cookies pulled from the browser as a fallback when present), and request body/payload if any.
+            plus cookies pulled from the browser as a fallback when present), and request body/payload if any
+            (pretty-printed JSON). OPTIONS preflight is automatically skipped in favor of the real request, so
+            you never need to filter it out yourself.
           - THIS is what to call whenever the user asks you to "give me this API", "give me the request/endpoint",
             "how do I call this in curl", etc. Always locate the exact request first via find_api_requests /
             get_network_requests (do not guess a URL), then call get_curl on it, then put the returned curl
@@ -132,7 +136,7 @@ class AgentEngine(
 
     private val history = mutableListOf(ChatTurn("system", systemPrompt))
 
-    suspend fun run(userGoal: String, maxSteps: Int = 9, onEvent: suspend (AgentEvent) -> Unit) {
+    suspend fun run(userGoal: String, maxSteps: Int = 15, onEvent: suspend (AgentEvent) -> Unit) {
         val currentPage = runCatching { tools.currentUrl() }.getOrDefault("")
         val contextualGoal = if (currentPage.isNotBlank()) {
             "Current browser page: $currentPage\n\nUser request: $userGoal"
@@ -140,14 +144,24 @@ class AgentEngine(
             userGoal
         }
         history += ChatTurn("user", contextualGoal)
-        // Verbatim get_curl results captured this run (unsanitized only - sanitized ones are
-        // *meant* to have placeholders). Small free models frequently "helpfully" retype a
-        // captured curl with the cookie/token swapped for something like <YOUR_TOKEN> even when
-        // told explicitly not to, because it pattern-matches as a secret worth redacting. Since
-        // we already have the exact right string from the tool call itself, the fix isn't to
-        // trust the model's transcription - it's to splice the real one back in below.
-        val realCurlBlocks = mutableListOf<String>()
+        // Verbatim tool output captured this run that must survive into final_answer unmangled -
+        // get_curl (unsanitized), get_graphql_queries, infer_schema. Small free models frequently
+        // "helpfully" retype these with values swapped for placeholders, or paraphrase/truncate a
+        // long JSON/schema block, even when told explicitly not to. Since we already have the
+        // exact right string from the tool call itself, the fix isn't to trust the model's
+        // transcription - it's to splice the real one back in below.
+        val verbatimBlocks = mutableListOf<String>()
+        var lastUsefulObservation: String? = null
+        var lastActionSignature: String? = null
+        var repeatCount = 0
         repeat(maxSteps) { step ->
+            val stepsLeft = maxSteps - step
+            if (stepsLeft == 2) {
+                history += ChatTurn(
+                    "user",
+                    "You have 2 steps left. If you already have enough information to answer, call final_answer now with your best current findings instead of continuing to explore."
+                )
+            }
             val result = client.chat(apiKey, model, history)
             val raw = result.getOrElse {
                 // Surface the actual failure (HTTP status/body from OpenRouterClient, or the raw
@@ -195,36 +209,58 @@ class AgentEngine(
 
             if (action == "final_answer") {
                 val modelText = input.optString("text").ifBlank { thought }
-                val finalText = if (realCurlBlocks.isEmpty()) modelText else injectRealCurl(modelText, realCurlBlocks)
+                val finalText = if (verbatimBlocks.isEmpty()) modelText else injectVerbatimBlocks(modelText, verbatimBlocks)
                 onEvent(AgentEvent.FinalAnswer(finalText))
                 return
             }
 
+            // Same tool + same input twice in a row is a stuck loop (usually a URL filter that
+            // isn't matching what the model expects) - nudge it toward a different move instead
+            // of silently burning the whole step budget on repeats, like the 9-step DeepSeek
+            // OPTIONS-vs-POST run that never converged.
+            val signature = "$action:${input}"
+            repeatCount = if (signature == lastActionSignature) repeatCount + 1 else 0
+            lastActionSignature = signature
+            if (repeatCount == 1) {
+                history += ChatTurn(
+                    "user",
+                    "You just called the exact same action with the same input again and got the same result. That filter isn't finding what you need - try get_network_requests with no filter to see everything captured, or a different/broader substring, or add a \"method\" filter."
+                )
+            }
+
             onEvent(AgentEvent.ToolCall(action, input.toString()))
             val observation = runCatching { execute(action, input) }.getOrElse { "Error: ${it.message}" }
-            if (action == "get_curl" && !input.optBoolean("sanitized", false) && observation.startsWith("curl")) {
-                realCurlBlocks += observation
+            val sanitized = input.optBoolean("sanitized", false)
+            when {
+                action == "get_curl" && !sanitized && observation.startsWith("curl") -> verbatimBlocks += observation
+                action == "get_graphql_queries" && !observation.startsWith("No ") -> verbatimBlocks += observation
+                action == "infer_schema" && !observation.startsWith("No ") -> verbatimBlocks += observation
             }
+            if (!observation.startsWith("No ") && !observation.startsWith("Error")) lastUsefulObservation = observation
             onEvent(AgentEvent.ToolResult(observation))
             history += ChatTurn("user", "Observation: $observation")
         }
-        onEvent(AgentEvent.Error("Stopped after $maxSteps steps without a final answer."))
+        // Don't just say "stopped" - hand back whatever the agent actually found, so a run that
+        // located the right request but ran out of steps before calling final_answer doesn't
+        // throw that work away.
+        val evidence = lastUsefulObservation?.let { "\n\nBest information found before running out of steps:\n$it" } ?: ""
+        onEvent(AgentEvent.Error("Stopped after $maxSteps steps without a final answer.$evidence"))
     }
 
-    /** Replaces whatever code block(s) the model wrote with the real, verbatim get_curl
-     *  output(s) from this run - guaranteeing the user always gets a runnable command with the
-     *  actual captured cookie/token/session values, never a model-invented `<YOUR_TOKEN>`
-     *  placeholder, regardless of how faithfully the underlying model transcribed it. Only
-     *  applies to unsanitized get_curl results; sanitized ones are supposed to have placeholders. */
-    private fun injectRealCurl(modelText: String, realCurlBlocks: List<String>): String {
-        val alreadyVerbatim = realCurlBlocks.all { modelText.contains(it) }
+    /** Replaces whatever code block(s) the model wrote with the real, verbatim tool output(s)
+     *  from this run (get_curl, get_graphql_queries, infer_schema) - guaranteeing the user always
+     *  gets the actual captured data, never a model-paraphrased or redacted stand-in, regardless
+     *  of how faithfully the underlying model transcribed it. Unsanitized get_curl results only;
+     *  sanitized ones are supposed to have placeholders. */
+    private fun injectVerbatimBlocks(modelText: String, verbatimBlocks: List<String>): String {
+        val alreadyVerbatim = verbatimBlocks.all { modelText.contains(it) }
         if (alreadyVerbatim) return modelText
         val withoutCodeFences = modelText.replace(Regex("```[a-zA-Z]*\\n[\\s\\S]*?```"), "").trimEnd()
-        val curlSection = realCurlBlocks.joinToString("\n\n") { "```bash\n$it\n```" }
+        val section = verbatimBlocks.joinToString("\n\n") { "```\n$it\n```" }
         return buildString {
             append(withoutCodeFences)
             if (withoutCodeFences.isNotBlank()) append("\n\n")
-            append(curlSection)
+            append(section)
         }
     }
 
@@ -284,7 +320,8 @@ class AgentEngine(
         }
         "find_api_requests" -> {
             val filter = input.optString("filter").ifBlank { null }
-            val results = tools.findApiRequests(filter)
+            val method = input.optString("method").ifBlank { null }
+            val results = tools.findApiRequests(filter, method)
             if (results.isEmpty()) "No API-like requests captured yet (try browsing/interacting with the page first, or widen the filter)."
             else results.joinToString("\n") { "- $it" }
         }
@@ -295,7 +332,8 @@ class AgentEngine(
         "get_curl" -> {
             val filter = input.optString("url_filter")
             val sanitized = input.optBoolean("sanitized", false)
-            tools.getCurlForRequest(filter, sanitized) ?: "No captured request found matching \"$filter\". Try find_api_requests or get_network_requests first to locate the exact request."
+            val method = input.optString("method").ifBlank { null }
+            tools.getCurlForRequest(filter, sanitized, method) ?: "No captured request found matching \"$filter\". Try find_api_requests or get_network_requests first to locate the exact request."
         }
         "find_auth_flow" -> tools.findAuthFlow()
         "diff_requests" -> {
