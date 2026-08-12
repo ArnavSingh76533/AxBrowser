@@ -124,6 +124,30 @@ class AgentEngine(
             something finishing loading first.
         - take_screenshot: {} - saves a PNG of the current page to device storage and returns the file path, to
           give the user visual confirmation of a result. This does NOT let you (the model) see the image yourself.
+        - switch_tab: {"filter": "substring to match against an open tab's title or URL"}
+          - switches to and waits on an already-open tab (see list_tabs) - use to act on/inspect a different
+            tab (e.g. one a link opened in a popup) without losing your place in this one.
+        - save_request: {"label": "short name to save it under", "curl": "the exact curl string from a prior get_curl call"}
+          - bookmarks a curl command for later recall (get_saved_request) instead of it only existing in this
+            one answer. Use after get_curl when the user says things like "save that" / "remember this request".
+        - list_saved_requests: {} - every previously saved request (label, domain, when saved).
+        - get_saved_request: {"label": "the label it was saved under"}
+        - remember_site_note: {"note": "a short fact worth remembering about this site for NEXT time"}
+          - persists across chat sessions, not just this run - e.g. "login form's real field name is 'user_login'
+            not 'username'" or "API 403s without an X-Client-Version header". Relevant notes for the current
+            domain are automatically added to your context at the start of a run, so you don't need to call
+            recall_site_notes yourself unless the user explicitly asks what's remembered about a site.
+        - recall_site_notes: {"domain": "optional - defaults to the current page's domain"}
+        - watch_page: {"label": "short name for this watch", "url": "the URL to check", "interval_minutes": "how often, minimum/default 15-60"}
+          - schedules a recurring BACKGROUND check (works even after this chat closes) that notifies the user
+            when the page's raw HTML content changes. This is a plain HTTP fetch, not a live render - it won't
+            catch changes that only appear after client-side JS runs, so say so if the user's ask depends on
+            JS-rendered content specifically.
+        - list_watches: {} - every active background watch.
+        - cancel_watch: {"label": "the watch's label"}
+        - export_openapi: {} - writes an inferred OpenAPI 3.0 document from every API-like request captured this
+          session (grouped by path, with best-guess parameter/body shapes) and returns its path. Tell the user
+          it's inferred from observed traffic, not the site's real spec, so field types are guesses to verify.
         - get_detected_media: {} - direct video/audio URLs already detected on the page (from network responses and
           <video>/<source>/<audio> tags). Often a better download target than the page URL itself, especially for
           sites that stream from a different domain than the page.
@@ -165,8 +189,14 @@ class AgentEngine(
 
     suspend fun run(userGoal: String, maxSteps: Int = 15, onEvent: suspend (AgentEvent) -> Unit) {
         val currentPage = runCatching { tools.currentUrl() }.getOrDefault("")
+        val siteNotes = if (currentPage.isNotBlank()) {
+            runCatching { tools.recallSiteNotes(null) }.getOrDefault(emptyList())
+        } else emptyList()
+        val notesBlock = if (siteNotes.isNotEmpty()) {
+            "\n\nThings remembered about this site from previous visits:\n" + siteNotes.joinToString("\n") { "- $it" }
+        } else ""
         val contextualGoal = if (currentPage.isNotBlank()) {
-            "Current browser page: $currentPage\n\nUser request: $userGoal"
+            "Current browser page: $currentPage$notesBlock\n\nUser request: $userGoal"
         } else {
             userGoal
         }
@@ -423,6 +453,45 @@ class AgentEngine(
             if (tools.waitForElement(selector)) "\"$selector\" appeared." else "\"$selector\" did not appear within ~5s."
         }
         "take_screenshot" -> tools.takeScreenshot()
+        "switch_tab" -> {
+            val filter = input.optString("filter")
+            if (tools.switchTab(filter)) "Switched to tab matching \"$filter\". Current URL: ${tools.currentUrl()}"
+            else "No open tab matched \"$filter\". Use list_tabs to see what's open."
+        }
+        "save_request" -> {
+            val label = input.optString("label")
+            val curl = input.optString("curl")
+            if (label.isBlank() || curl.isBlank()) "Both \"label\" and \"curl\" are required (get the curl from get_curl first)." else tools.saveRequest(label, curl)
+        }
+        "list_saved_requests" -> {
+            val results = tools.listSavedRequests()
+            if (results.isEmpty()) "No saved requests yet." else results.joinToString("\n") { "- $it" }
+        }
+        "get_saved_request" -> {
+            val label = input.optString("label")
+            tools.getSavedRequest(label) ?: "No saved request found under \"$label\"."
+        }
+        "remember_site_note" -> tools.rememberSiteNote(input.optString("note"))
+        "recall_site_notes" -> {
+            val domain = input.optString("domain").ifBlank { null }
+            val notes = tools.recallSiteNotes(domain)
+            if (notes.isEmpty()) "No notes remembered for this site yet." else notes.joinToString("\n") { "- $it" }
+        }
+        "watch_page" -> {
+            val label = input.optString("label")
+            val url = input.optString("url")
+            val interval = input.optInt("interval_minutes", 60)
+            if (label.isBlank() || url.isBlank()) "Both \"label\" and \"url\" are required." else tools.watchPage(label, url, interval)
+        }
+        "list_watches" -> {
+            val results = tools.listWatches()
+            if (results.isEmpty()) "No active page watches." else results.joinToString("\n") { "- $it" }
+        }
+        "cancel_watch" -> {
+            val label = input.optString("label")
+            if (tools.cancelWatch(label)) "Cancelled watch \"$label\"." else "No watch found under \"$label\"."
+        }
+        "export_openapi" -> tools.exportOpenApi()
         "get_detected_media" -> {
             val results = tools.getDetectedMedia()
             if (results.isEmpty()) "No direct media URLs detected on this page yet."

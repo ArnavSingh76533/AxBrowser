@@ -1443,6 +1443,122 @@ fun BrowserScreen(
                     "Saved screenshot (${wv.width}x${wv.height}) to ${file.absolutePath}"
                 }.getOrElse { "Failed to capture screenshot: ${it.message}" }
             }
+
+            private fun domainOf(url: String) = runCatching { java.net.URI(url).host ?: url }.getOrDefault(url)
+
+            override suspend fun switchTab(filter: String): Boolean {
+                val match = viewModel.uiState.value.tabs.firstOrNull {
+                    it.title.contains(filter, ignoreCase = true) || it.url.contains(filter, ignoreCase = true)
+                } ?: return false
+                viewModel.setActiveTab(match)
+                waitForLoad()
+                return true
+            }
+
+            override suspend fun saveRequest(label: String, curl: String): String {
+                val domain = domainOf(webView?.url ?: viewModel.uiState.value.displayUrl)
+                viewModel.saveRequest(label, curl, domain)
+                return "Saved as \"$label\" (domain: $domain). Recall it later with get_saved_request."
+            }
+
+            override suspend fun listSavedRequests(): List<String> = viewModel.listSavedRequests().map { r ->
+                "${r.label} (${r.domain}, saved ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(java.util.Date(r.createdAt))})"
+            }
+
+            override suspend fun getSavedRequest(label: String): String? = viewModel.getSavedRequest(label)?.curl
+
+            override suspend fun rememberSiteNote(note: String): String {
+                val domain = domainOf(webView?.url ?: viewModel.uiState.value.displayUrl)
+                viewModel.addSiteNote(domain, note)
+                return "Noted for $domain - this will be recalled automatically next time you're on this site."
+            }
+
+            override suspend fun recallSiteNotes(domain: String?): List<String> {
+                val d = domain ?: domainOf(webView?.url ?: viewModel.uiState.value.displayUrl)
+                return viewModel.getSiteNotes(d).map { it.note }
+            }
+
+            override suspend fun watchPage(label: String, url: String, intervalMinutes: Int): String {
+                val clamped = intervalMinutes.coerceAtLeast(15)
+                viewModel.createWatch(label, url, clamped)
+                com.akay.core.data.watch.PageWatchWorker.schedule(context, label, clamped)
+                val note = if (clamped != intervalMinutes) " (interval raised to $clamped min - Android's minimum for background checks)" else ""
+                return "Watching \"$url\" as \"$label\", checking every $clamped min$note. You'll get a notification if its content changes."
+            }
+
+            override suspend fun listWatches(): List<String> = viewModel.listWatches().map { w ->
+                val lastChecked = w.lastCheckedAt?.let { java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(java.util.Date(it)) } ?: "not yet"
+                "${w.label} \u2192 ${w.url} (every ${w.intervalMinutes} min, last checked: $lastChecked)"
+            }
+
+            override suspend fun cancelWatch(label: String): Boolean {
+                val existed = viewModel.listWatches().any { it.label == label }
+                viewModel.cancelWatch(label)
+                com.akay.core.data.watch.PageWatchWorker.cancel(context, label)
+                return existed
+            }
+
+            override suspend fun exportOpenApi(): String {
+                val all = com.akay.feature.browser.devconsole.NetworkInterceptor.requests.value.filter { it.isApiLike }
+                if (all.isEmpty()) return "No API-like requests captured yet - nothing to export."
+                return runCatching {
+                    data class Key(val method: String, val path: String)
+                    val grouped = all.groupBy { Key(it.method.uppercase(), domainOf(it.url) + runCatching { java.net.URI(it.url).path }.getOrDefault("")) }
+                    val paths = org.json.JSONObject()
+                    val servers = org.json.JSONArray()
+                    all.map { "${runCatching { java.net.URI(it.url).scheme }.getOrNull() ?: "https"}://${domainOf(it.url)}" }
+                        .distinct().forEach { servers.put(org.json.JSONObject().apply { put("url", it) }) }
+                    grouped.entries.groupBy { it.key.path }.forEach { (path, entries) ->
+                        val pathItem = org.json.JSONObject()
+                        entries.forEach { (key, reqs) ->
+                            val example = reqs.last()
+                            val params = org.json.JSONArray()
+                            runCatching { java.net.URI(example.url).query }.getOrNull()?.split("&")?.filter { it.contains("=") }?.forEach { p ->
+                                params.put(org.json.JSONObject().apply {
+                                    put("name", p.substringBefore("="))
+                                    put("in", "query")
+                                    put("schema", org.json.JSONObject().apply { put("type", "string") })
+                                })
+                            }
+                            val op = org.json.JSONObject().apply {
+                                put("summary", "Captured from AxBrowser session")
+                                put("parameters", params)
+                                if (example.requestBody.isNotBlank()) {
+                                    put("requestBody", org.json.JSONObject().apply {
+                                        put("content", org.json.JSONObject().apply {
+                                            put("application/json", org.json.JSONObject().apply {
+                                                put("example", runCatching { org.json.JSONObject(example.requestBody) }.getOrNull()
+                                                    ?: runCatching { org.json.JSONArray(example.requestBody) }.getOrNull() ?: example.requestBody)
+                                            })
+                                        })
+                                    })
+                                }
+                                put("responses", org.json.JSONObject().apply {
+                                    put((example.responseStatus ?: 200).toString(), org.json.JSONObject().apply {
+                                        put("description", "Captured response")
+                                    })
+                                })
+                            }
+                            pathItem.put(key.method.lowercase(), op)
+                        }
+                        paths.put(path.ifBlank { "/" }, pathItem)
+                    }
+                    val doc = org.json.JSONObject().apply {
+                        put("openapi", "3.0.3")
+                        put("info", org.json.JSONObject().apply {
+                            put("title", "AxBrowser capture ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(java.util.Date())}")
+                            put("version", "1.0.0")
+                        })
+                        put("servers", servers)
+                        put("paths", paths)
+                    }
+                    val dir = java.io.File(context.filesDir, "openapi_exports").apply { mkdirs() }
+                    val file = java.io.File(dir, "axbrowser_${System.currentTimeMillis()}.openapi.json")
+                    file.writeText(doc.toString(2))
+                    "Exported ${grouped.values.sumOf { it.size }} requests across ${paths.length()} paths to ${file.absolutePath} \u2014 " +
+                        "note this is inferred from observed traffic, not a real spec from the site, so treat field types as guesses to verify."
+                }.getOrElse { "Failed to export OpenAPI doc: ${it.message}" }
+            }
         }
     }
 

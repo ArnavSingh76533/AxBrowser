@@ -9,7 +9,10 @@ import com.akay.core.data.db.dao.HistoryDao
 import com.akay.core.data.db.dao.PasswordDao
 import com.akay.core.data.db.dao.PermissionDao
 import com.akay.core.data.db.dao.ProxyDao
+import com.akay.core.data.db.dao.SavedRequestDao
+import com.akay.core.data.db.dao.SiteNoteDao
 import com.akay.core.data.db.dao.TabDao
+import com.akay.core.data.db.dao.WatchDao
 import com.akay.core.data.db.entity.BlockedDomainEntity
 import com.akay.core.data.db.entity.BookmarkEntity
 import com.akay.core.data.db.entity.BookmarkFolderEntity
@@ -17,8 +20,11 @@ import com.akay.core.data.db.entity.DownloadEntity
 import com.akay.core.data.db.entity.HistoryEntity
 import com.akay.core.data.db.entity.PasswordEntity
 import com.akay.core.data.db.entity.ProxyEntity
+import com.akay.core.data.db.entity.SavedRequestEntity
 import com.akay.core.data.db.entity.SitePermissionEntity
+import com.akay.core.data.db.entity.SiteNoteEntity
 import com.akay.core.data.db.entity.TabEntity
+import com.akay.core.data.db.entity.WatchEntity
 
 @Database(
     entities = [
@@ -30,9 +36,12 @@ import com.akay.core.data.db.entity.TabEntity
         BlockedDomainEntity::class,
         SitePermissionEntity::class,
         PasswordEntity::class,
-        ProxyEntity::class
+        ProxyEntity::class,
+        SavedRequestEntity::class,
+        SiteNoteEntity::class,
+        WatchEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = true
 )
 abstract class AxDatabase : RoomDatabase() {
@@ -44,4 +53,7 @@ abstract class AxDatabase : RoomDatabase() {
     abstract fun permissionDao(): PermissionDao
     abstract fun passwordDao(): PasswordDao
     abstract fun proxyDao(): ProxyDao
+    abstract fun savedRequestDao(): SavedRequestDao
+    abstract fun siteNoteDao(): SiteNoteDao
+    abstract fun watchDao(): WatchDao
 }

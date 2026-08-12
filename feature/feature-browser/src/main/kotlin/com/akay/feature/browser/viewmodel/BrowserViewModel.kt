@@ -74,7 +74,10 @@ class BrowserViewModel @Inject constructor(
     private val adBlockRepository: AdBlockRepository,
     private val passwordRepository: PasswordRepository,
     val openRouterClient: OpenRouterClient,
-    private val proxyManager: com.akay.core.data.proxy.ProxyManager
+    private val proxyManager: com.akay.core.data.proxy.ProxyManager,
+    private val savedRequestDao: com.akay.core.data.db.dao.SavedRequestDao,
+    private val siteNoteDao: com.akay.core.data.db.dao.SiteNoteDao,
+    private val watchDao: com.akay.core.data.db.dao.WatchDao
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(BrowserUiState())
@@ -473,4 +476,40 @@ class BrowserViewModel @Inject constructor(
     fun onEventConsumed() {
         _events.value = null
     }
+
+    // --- Agent persistence: saved curl requests, per-domain notes, background page watches ---
+    // Plain DAO wrappers (no repository layer) - these three are agent-internal bookkeeping
+    // rather than user-facing domain concepts like bookmarks/history, so the extra
+    // interface+impl indirection isn't pulling its weight here.
+
+    suspend fun saveRequest(label: String, curl: String, domain: String) {
+        savedRequestDao.upsert(
+            com.akay.core.data.db.entity.SavedRequestEntity(
+                label = label, curl = curl, domain = domain, createdAt = System.currentTimeMillis()
+            )
+        )
+    }
+
+    suspend fun listSavedRequests() = savedRequestDao.getAll()
+    suspend fun getSavedRequest(label: String) = savedRequestDao.getByLabel(label)
+    suspend fun deleteSavedRequest(label: String) = savedRequestDao.deleteByLabel(label)
+
+    suspend fun addSiteNote(domain: String, note: String) {
+        siteNoteDao.insert(
+            com.akay.core.data.db.entity.SiteNoteEntity(domain = domain, note = note, createdAt = System.currentTimeMillis())
+        )
+    }
+
+    suspend fun getSiteNotes(domain: String) = siteNoteDao.getForDomain(domain)
+
+    suspend fun createWatch(label: String, url: String, intervalMinutes: Int) {
+        watchDao.upsert(
+            com.akay.core.data.db.entity.WatchEntity(
+                label = label, url = url, intervalMinutes = intervalMinutes, createdAt = System.currentTimeMillis()
+            )
+        )
+    }
+
+    suspend fun listWatches() = watchDao.getAll()
+    suspend fun cancelWatch(label: String) = watchDao.deleteByLabel(label)
 }

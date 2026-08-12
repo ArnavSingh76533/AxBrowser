@@ -11,7 +11,10 @@ import com.akay.core.data.db.dao.HistoryDao
 import com.akay.core.data.db.dao.PasswordDao
 import com.akay.core.data.db.dao.PermissionDao
 import com.akay.core.data.db.dao.ProxyDao
+import com.akay.core.data.db.dao.SavedRequestDao
+import com.akay.core.data.db.dao.SiteNoteDao
 import com.akay.core.data.db.dao.TabDao
+import com.akay.core.data.db.dao.WatchDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -58,6 +61,15 @@ object DataModule {
 
     @Provides
     fun provideProxyDao(database: AxDatabase): ProxyDao = database.proxyDao()
+
+    @Provides
+    fun provideSavedRequestDao(database: AxDatabase): SavedRequestDao = database.savedRequestDao()
+
+    @Provides
+    fun provideSiteNoteDao(database: AxDatabase): SiteNoteDao = database.siteNoteDao()
+
+    @Provides
+    fun provideWatchDao(database: AxDatabase): WatchDao = database.watchDao()
 
     @Provides
     @Singleton

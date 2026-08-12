@@ -124,6 +124,51 @@ interface AgentToolExecutor {
      *  model for visual inspection (that needs a vision-capable model + multimodal message
      *  support, which isn't wired up yet). */
     suspend fun takeScreenshot(): String
+
+    /** Switches the active tab to the first open tab whose title or URL contains [filter], and
+     *  waits briefly for it to be ready - so the agent can act across multiple already-open tabs
+     *  (e.g. "check the API call that happened in the popup tab") rather than only the one it
+     *  started in. Returns false if no open tab matched. */
+    suspend fun switchTab(filter: String): Boolean
+
+    /** Saves the given curl command under [label] for later recall via getSavedRequest, so a
+     *  request the agent worked to locate doesn't need re-discovering next time. */
+    suspend fun saveRequest(label: String, curl: String): String
+
+    /** Lists every request saved via saveRequest (label + domain + when saved). */
+    suspend fun listSavedRequests(): List<String>
+
+    /** The exact curl command previously saved under [label], or null if no such label exists. */
+    suspend fun getSavedRequest(label: String): String?
+
+    /** Records a short note about the current site's domain that will be available again in a
+     *  FUTURE chat session on this same domain (injected into context automatically at the start
+     *  of a run) - not just later in this one run. Use for things worth remembering across visits:
+     *  quirks of a site's auth flow, a header it requires, a login form's actual field names. */
+    suspend fun rememberSiteNote(note: String): String
+
+    /** Explicitly looks up saved notes for a domain (defaults to the current page's domain if
+     *  none given) - normally unnecessary since relevant notes are auto-injected at run start,
+     *  but useful when the user asks "what do you remember about this site". */
+    suspend fun recallSiteNotes(domain: String?): List<String>
+
+    /** Schedules a recurring background check of [url] that notifies the user when its raw HTML
+     *  content changes (checked via plain HTTP fetch, not a live WebView render - won't catch
+     *  changes that only appear after client-side JS runs). [intervalMinutes] is clamped up to
+     *  15, Android's minimum for periodic background work. */
+    suspend fun watchPage(label: String, url: String, intervalMinutes: Int): String
+
+    /** Lists every active background watch (label, URL, interval, last checked time). */
+    suspend fun listWatches(): List<String>
+
+    /** Cancels the background watch registered under [label]. */
+    suspend fun cancelWatch(label: String): Boolean
+
+    /** Generates a minimal OpenAPI 3.0 document from every API-like request captured this
+     *  session (grouped by path, with inferred parameter/body shapes) and writes it to app
+     *  storage, returning the path - for the user who wants a real spec to build a client
+     *  against rather than one-off curl commands. */
+    suspend fun exportOpenApi(): String
 }
 
 data class AgentLink(val text: String, val href: String)
