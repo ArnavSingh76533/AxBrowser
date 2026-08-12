@@ -97,6 +97,33 @@ class AgentEngine(
         - export_har: {} - writes everything captured so far to a HAR file on device and returns its path, for
           the user to load into Chrome DevTools / Postman / Insomnia / Charles when they want the whole session,
           not one request at a time.
+        - export_postman: {} - like export_har but as a Postman Collection v2.1 file, better when the user wants
+          to keep building on a discovered API in Postman/Insomnia rather than just replaying one call.
+        - get_cookies: {} - lists every cookie set for the current page's domain, name and value. Use this when
+          the user specifically wants to see cookies rather than a full curl command.
+        - find_rate_limits: {} - scans captured response headers for rate-limit signals (X-RateLimit-*,
+          RateLimit-*, Retry-After) and summarizes what the API's real limits look like.
+        - list_endpoints: {} - de-duplicated, grouped summary of every distinct method+path this session, with
+          call counts and an example URL for each. Use this FIRST when the user asks "what API does this site
+          use" or "what endpoints does it have" - it's the overview; find_api_requests/get_curl are for a
+          specific one you've already identified.
+        - detect_pagination: {} - looks across every endpoint called 3+ times this session and reports which
+          query param actually changed between calls (candidate pagination/cursor). Use this instead of
+          diff_requests when you don't already have two specific requests picked out to compare.
+        - click_element: {"selector": "a CSS selector, e.g. 'button.submit' or '#login-btn'"}
+          - clicks the first matching element. Prefer click_link for plain <a> links (matches by visible text,
+            more forgiving); use this for buttons/anything needing a real CSS selector.
+        - type_text: {"selector": "CSS selector for an input/textarea", "text": "text to type"}
+          - fills a form field the way a real user would (dispatches input/change events, so React/Vue-controlled
+            forms pick it up, not just raw DOM).
+        - scroll_to: {"selector": "optional CSS selector to scroll into view", "pixels": "optional number of px to scroll by if no selector"}
+          - use before clicking something off-screen, or repeatedly to trigger infinite-scroll/lazy-loaded content
+            you need to see in the network log.
+        - wait_for_element: {"selector": "CSS selector to wait for"}
+          - polls up to ~5s for something to appear before you act on it, for pages where the next step depends on
+            something finishing loading first.
+        - take_screenshot: {} - saves a PNG of the current page to device storage and returns the file path, to
+          give the user visual confirmation of a result. This does NOT let you (the model) see the image yourself.
         - get_detected_media: {} - direct video/audio URLs already detected on the page (from network responses and
           <video>/<source>/<audio> tags). Often a better download target than the page URL itself, especially for
           sites that stream from a different domain than the page.
@@ -154,6 +181,9 @@ class AgentEngine(
         var lastUsefulObservation: String? = null
         var lastActionSignature: String? = null
         var repeatCount = 0
+        var totalPromptTokens = 0
+        var totalCompletionTokens = 0
+        val toolsUsed = mutableListOf<String>()
         repeat(maxSteps) { step ->
             val stepsLeft = maxSteps - step
             if (stepsLeft == 2) {
@@ -163,7 +193,7 @@ class AgentEngine(
                 )
             }
             val result = client.chat(apiKey, model, history)
-            val raw = result.getOrElse {
+            val chatResult = result.getOrElse {
                 // Surface the actual failure (HTTP status/body from OpenRouterClient, or the raw
                 // exception) instead of a generic "request failed" - this was the #1 confusing
                 // error users hit, since the real cause (bad key, rate limit, model down, no
@@ -172,6 +202,9 @@ class AgentEngine(
                 onEvent(AgentEvent.Error("Model request failed: $detail"))
                 return
             }
+            val raw = chatResult.content
+            totalPromptTokens += chatResult.promptTokens
+            totalCompletionTokens += chatResult.completionTokens
             history += ChatTurn("assistant", raw)
 
             var json = extractJson(raw)
@@ -186,11 +219,14 @@ class AgentEngine(
                     "Your last reply wasn't a single valid JSON object as instructed. Reply again with ONLY the JSON object described in the system prompt - no prose, no markdown fences."
                 )
                 val retryResult = client.chat(apiKey, model, history)
-                val retryRaw = retryResult.getOrElse {
+                val retryChatResult = retryResult.getOrElse {
                     val detail = it.message?.takeIf { m -> m.isNotBlank() } ?: it.toString()
                     onEvent(AgentEvent.Error("Model request failed on retry: $detail"))
                     return
                 }
+                val retryRaw = retryChatResult.content
+                totalPromptTokens += retryChatResult.promptTokens
+                totalCompletionTokens += retryChatResult.completionTokens
                 history += ChatTurn("assistant", retryRaw)
                 json = extractJson(retryRaw)
                 if (json == null) {
@@ -209,7 +245,16 @@ class AgentEngine(
 
             if (action == "final_answer") {
                 val modelText = input.optString("text").ifBlank { thought }
-                val finalText = if (verbatimBlocks.isEmpty()) modelText else injectVerbatimBlocks(modelText, verbatimBlocks)
+                var finalText = if (verbatimBlocks.isEmpty()) modelText else injectVerbatimBlocks(modelText, verbatimBlocks)
+                // Small recap footer: what it did and roughly what it cost. Token counts are 0 when
+                // the underlying model/provider doesn't report usage (common on some free models) -
+                // in that case this quietly reduces to just the step/tool count.
+                if (toolsUsed.isNotEmpty()) {
+                    val tokenPart = if (totalPromptTokens + totalCompletionTokens > 0) {
+                        ", ~${totalPromptTokens + totalCompletionTokens} tokens (${totalPromptTokens} in / ${totalCompletionTokens} out)"
+                    } else ""
+                    finalText += "\n\n---\n*${toolsUsed.size} step${if (toolsUsed.size == 1) "" else "s"}: ${toolsUsed.joinToString(" \u2192 ")}$tokenPart*"
+                }
                 onEvent(AgentEvent.FinalAnswer(finalText))
                 return
             }
@@ -229,6 +274,7 @@ class AgentEngine(
             }
 
             onEvent(AgentEvent.ToolCall(action, input.toString()))
+            toolsUsed += action
             val observation = runCatching { execute(action, input) }.getOrElse { "Error: ${it.message}" }
             val sanitized = input.optBoolean("sanitized", false)
             when {
@@ -352,6 +398,31 @@ class AgentEngine(
             else results.joinToString("\n\n---\n\n")
         }
         "export_har" -> tools.exportHar()
+        "export_postman" -> tools.exportPostman()
+        "get_cookies" -> tools.getCookies()
+        "find_rate_limits" -> tools.findRateLimits()
+        "list_endpoints" -> tools.listEndpoints()
+        "detect_pagination" -> tools.detectPagination()
+        "click_element" -> {
+            val selector = input.optString("selector")
+            if (tools.clickElement(selector)) "Clicked \"$selector\". Current URL: ${tools.currentUrl()}"
+            else "No element matched selector \"$selector\"."
+        }
+        "type_text" -> {
+            val selector = input.optString("selector")
+            val text = input.optString("text")
+            if (tools.typeIntoElement(selector, text)) "Typed into \"$selector\"." else "No element matched selector \"$selector\"."
+        }
+        "scroll_to" -> {
+            val selector = input.optString("selector").ifBlank { null }
+            val pixels = if (input.has("pixels")) input.optInt("pixels") else null
+            if (tools.scrollTo(selector, pixels)) "Scrolled." else "No element matched selector \"$selector\"."
+        }
+        "wait_for_element" -> {
+            val selector = input.optString("selector")
+            if (tools.waitForElement(selector)) "\"$selector\" appeared." else "\"$selector\" did not appear within ~5s."
+        }
+        "take_screenshot" -> tools.takeScreenshot()
         "get_detected_media" -> {
             val results = tools.getDetectedMedia()
             if (results.isEmpty()) "No direct media URLs detected on this page yet."

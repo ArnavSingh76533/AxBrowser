@@ -119,4 +119,59 @@ object AgentJs {
             })();
         """.trimIndent()
     }
+
+    private fun escapeSelector(selector: String) = selector.replace("\\", "\\\\").replace("'", "\\'")
+    private fun escapeText(text: String) = text.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
+
+    /** Clicks the first element matching [selector]. */
+    fun clickSelector(selector: String): String = """
+        (function() {
+            var el = document.querySelector('${escapeSelector(selector)}');
+            if (!el) return 'false';
+            el.scrollIntoView({block: 'center'});
+            el.click();
+            return 'true';
+        })();
+    """.trimIndent()
+
+    /** Types [text] into the first element matching [selector], using the framework-compatible
+     *  native-setter trick so React/Vue-controlled inputs (which override the plain .value setter)
+     *  actually pick up the change instead of silently ignoring a direct DOM mutation. */
+    fun typeIntoSelector(selector: String, text: String): String = """
+        (function() {
+            var el = document.querySelector('${escapeSelector(selector)}');
+            if (!el) return 'false';
+            el.focus();
+            var proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+            var setter = Object.getOwnPropertyDescriptor(proto, 'value') && Object.getOwnPropertyDescriptor(proto, 'value').set;
+            if (setter) { setter.call(el, '${escapeText(text)}'); } else { el.value = '${escapeText(text)}'; }
+            el.dispatchEvent(new Event('input', {bubbles: true}));
+            el.dispatchEvent(new Event('change', {bubbles: true}));
+            return 'true';
+        })();
+    """.trimIndent()
+
+    /** Scrolls [selector] into view, or scrolls the page by [pixels] when no selector is given. */
+    fun scrollTo(selector: String?, pixels: Int?): String = if (!selector.isNullOrBlank()) {
+        """
+            (function() {
+                var el = document.querySelector('${escapeSelector(selector)}');
+                if (!el) return 'false';
+                el.scrollIntoView({block: 'center', behavior: 'smooth'});
+                return 'true';
+            })();
+        """.trimIndent()
+    } else {
+        """
+            (function() {
+                window.scrollBy(0, ${pixels ?: 800});
+                return 'true';
+            })();
+        """.trimIndent()
+    }
+
+    /** Checks (once) whether [selector] currently exists in the DOM - the Kotlin side polls this in a loop. */
+    fun elementExists(selector: String): String = """
+        (function() { return document.querySelector('${escapeSelector(selector)}') ? 'true' : 'false'; })();
+    """.trimIndent()
 }

@@ -1286,6 +1286,163 @@ fun BrowserScreen(
                     "Exported ${all.size} requests to ${file.absolutePath} \u2014 pull it via adb or share it, then open in Chrome DevTools / Postman / Insomnia (File > Import)."
                 }.getOrElse { "Failed to export HAR: ${it.message}" }
             }
+
+            override suspend fun exportPostman(): String {
+                val all = com.akay.feature.browser.devconsole.NetworkInterceptor.requests.value.filter { it.isApiLike }
+                if (all.isEmpty()) return "No API-like requests captured yet - nothing to export."
+                return runCatching {
+                    val items = org.json.JSONArray()
+                    all.forEach { req ->
+                        val urlObj = runCatching {
+                            val u = java.net.URI(req.url)
+                            org.json.JSONObject().apply {
+                                put("raw", req.url)
+                                put("protocol", u.scheme ?: "https")
+                                put("host", org.json.JSONArray((u.host ?: "").split(".")))
+                                put("path", org.json.JSONArray((u.path ?: "").trim('/').split("/").filter { it.isNotBlank() }))
+                            }
+                        }.getOrDefault(org.json.JSONObject().apply { put("raw", req.url) })
+                        val headers = org.json.JSONArray().apply {
+                            req.requestHeaders.forEach { (k, v) -> put(org.json.JSONObject().apply { put("key", k); put("value", v) }) }
+                        }
+                        val request = org.json.JSONObject().apply {
+                            put("method", req.method)
+                            put("header", headers)
+                            put("url", urlObj)
+                            if (req.requestBody.isNotBlank()) {
+                                put("body", org.json.JSONObject().apply {
+                                    put("mode", "raw")
+                                    put("raw", req.requestBody)
+                                    put("options", org.json.JSONObject().apply {
+                                        put("raw", org.json.JSONObject().apply { put("language", "json") })
+                                    })
+                                })
+                            }
+                        }
+                        items.put(org.json.JSONObject().apply {
+                            put("name", "${req.method} ${req.url.substringAfter("://").take(60)}")
+                            put("request", request)
+                        })
+                    }
+                    val collection = org.json.JSONObject().apply {
+                        put("info", org.json.JSONObject().apply {
+                            put("name", "AxBrowser capture ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(java.util.Date())}")
+                            put("schema", "https://schema.getpostman.com/json/collection/v2.1.0/collection.json")
+                        })
+                        put("item", items)
+                    }
+                    val dir = java.io.File(context.filesDir, "postman_exports").apply { mkdirs() }
+                    val file = java.io.File(dir, "axbrowser_${System.currentTimeMillis()}.postman_collection.json")
+                    file.writeText(collection.toString(2))
+                    "Exported ${all.size} requests to ${file.absolutePath} \u2014 open Postman/Insomnia and File > Import that file."
+                }.getOrElse { "Failed to export Postman collection: ${it.message}" }
+            }
+
+            override suspend fun getCookies(): String {
+                val url = webView?.url ?: viewModel.uiState.value.displayUrl
+                if (url.isBlank()) return "No page loaded."
+                val raw = runCatching { CookieManager.getInstance().getCookie(url) }.getOrNull()
+                if (raw.isNullOrBlank()) return "No cookies set for this page's domain."
+                val pairs = raw.split(";").map { it.trim() }.filter { it.contains("=") }
+                return "Cookies for $url:\n" + pairs.joinToString("\n") { p ->
+                    val (k, v) = p.split("=", limit = 2)
+                    "- $k = $v"
+                } + "\n\n# NOTE: like a captured curl, these are tied to your own logged-in session - don't share them."
+            }
+
+            override suspend fun findRateLimits(): String {
+                val all = com.akay.feature.browser.devconsole.NetworkInterceptor.requests.value.filter { it.isApiLike }
+                val limitHeaderNames = setOf(
+                    "x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset",
+                    "ratelimit-limit", "ratelimit-remaining", "ratelimit-reset", "retry-after"
+                )
+                val withLimits = all.filter { req -> req.responseHeaders.keys.any { it.lowercase() in limitHeaderNames } }
+                if (withLimits.isEmpty()) return "No rate-limit headers seen in captured responses yet (site may not expose them, or none have been hit)."
+                return withLimits.takeLast(15).joinToString("\n\n") { req ->
+                    val relevant = req.responseHeaders.filterKeys { it.lowercase() in limitHeaderNames }
+                    "${req.method} ${req.url}\n" + relevant.entries.joinToString("\n") { "  ${it.key}: ${it.value}" }
+                }
+            }
+
+            override suspend fun listEndpoints(): String {
+                val all = com.akay.feature.browser.devconsole.NetworkInterceptor.requests.value.filter { it.isApiLike }
+                if (all.isEmpty()) return "No API-like requests captured yet."
+                data class Key(val method: String, val path: String)
+                fun pathOf(url: String) = runCatching { java.net.URI(url).let { "${it.host}${it.path}" } }.getOrDefault(url)
+                val grouped = all.groupBy { Key(it.method.uppercase(), pathOf(it.url)) }
+                val wasmSeen = all.any { it.url.lowercase().endsWith(".wasm") || (it.mimeType ?: "").contains("wasm") }
+                val lines = grouped.entries.sortedByDescending { it.value.size }.joinToString("\n") { (key, reqs) ->
+                    "- ${key.method} ${key.path}  (${reqs.size} call${if (reqs.size == 1) "" else "s"}, e.g. ${reqs.last().url})"
+                }
+                val wasmNote = if (wasmSeen) {
+                    "\n\n# NOTE: this page loads WebAssembly. If the real logic (signing, hashing, obfuscation) lives in " +
+                        "that .wasm module, it won't be visible from network traffic alone - reverse-engineering it needs " +
+                        "actual wasm disassembly, which is outside what this agent can do from the browser."
+                } else ""
+                return "Distinct endpoints this session:\n$lines$wasmNote"
+            }
+
+            override suspend fun detectPagination(): String {
+                val all = com.akay.feature.browser.devconsole.NetworkInterceptor.requests.value.filter { it.isApiLike }
+                fun pathOf(url: String) = runCatching { java.net.URI(url).let { "${it.host}${it.path}" } }.getOrDefault(url)
+                val groups = all.groupBy { pathOf(it.url) }.filterValues { it.size >= 3 }
+                if (groups.isEmpty()) return "No endpoint has been called 3+ times yet - browse more (e.g. scroll/next page a couple of times) so there's enough to compare."
+                val findings = groups.entries.mapNotNull { (path, reqs) ->
+                    fun queryParams(url: String) = runCatching {
+                        (java.net.URI(url).query ?: "").split("&").filter { it.contains("=") }
+                            .associate { it.substringBefore("=") to it.substringAfter("=") }
+                    }.getOrDefault(emptyMap())
+                    val paramSets = reqs.map { queryParams(it.url) }
+                    val allKeys = paramSets.flatMap { it.keys }.toSet()
+                    val changingKeys = allKeys.filter { key -> paramSets.map { it[key] }.distinct().size > 1 }
+                    if (changingKeys.isEmpty()) return@mapNotNull null
+                    val examples = changingKeys.associateWith { key -> paramSets.map { it[key] } }
+                    "$path \u2014 varies by: " + examples.entries.joinToString(", ") { (k, vs) -> "$k (${vs.joinToString(" \u2192 ")})" }
+                }
+                return if (findings.isEmpty()) "Called endpoints 3+ times but no query param changed between calls - pagination (if any) may be driven by request body or headers instead; try diff_requests on two specific calls."
+                else "Likely pagination/cursor params found:\n" + findings.joinToString("\n")
+            }
+
+            override suspend fun clickElement(selector: String): Boolean {
+                val wv = webView ?: return false
+                val clicked = unwrapJsString(wv.evalJs(com.akay.feature.browser.agent.AgentJs.clickSelector(selector))) == "true"
+                if (clicked) waitForLoad()
+                return clicked
+            }
+
+            override suspend fun typeIntoElement(selector: String, text: String): Boolean {
+                val wv = webView ?: return false
+                return unwrapJsString(wv.evalJs(com.akay.feature.browser.agent.AgentJs.typeIntoSelector(selector, text))) == "true"
+            }
+
+            override suspend fun scrollTo(selector: String?, pixels: Int?): Boolean {
+                val wv = webView ?: return false
+                kotlinx.coroutines.delay(150)
+                return unwrapJsString(wv.evalJs(com.akay.feature.browser.agent.AgentJs.scrollTo(selector, pixels))) == "true"
+            }
+
+            override suspend fun waitForElement(selector: String): Boolean {
+                val wv = webView ?: return false
+                repeat(10) {
+                    if (unwrapJsString(wv.evalJs(com.akay.feature.browser.agent.AgentJs.elementExists(selector))) == "true") return true
+                    kotlinx.coroutines.delay(500)
+                }
+                return false
+            }
+
+            override suspend fun takeScreenshot(): String {
+                val wv = webView ?: return "No page is currently loaded."
+                if (wv.width <= 0 || wv.height <= 0) return "Page has no visible size yet, try again after it finishes loading."
+                return runCatching {
+                    val bitmap = android.graphics.Bitmap.createBitmap(wv.width, wv.height, android.graphics.Bitmap.Config.ARGB_8888)
+                    wv.draw(android.graphics.Canvas(bitmap))
+                    val dir = java.io.File(context.filesDir, "agent_screenshots").apply { mkdirs() }
+                    val file = java.io.File(dir, "shot_${System.currentTimeMillis()}.png")
+                    file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                    bitmap.recycle()
+                    "Saved screenshot (${wv.width}x${wv.height}) to ${file.absolutePath}"
+                }.getOrElse { "Failed to capture screenshot: ${it.message}" }
+            }
         }
     }
 

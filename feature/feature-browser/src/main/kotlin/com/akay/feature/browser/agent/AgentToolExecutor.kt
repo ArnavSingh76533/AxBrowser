@@ -73,6 +73,57 @@ interface AgentToolExecutor {
     /** Writes everything captured so far as a HAR 1.2 file (loadable in DevTools/Postman/Charles/
      *  Insomnia) into app storage and returns the path, or an explanation if nothing to export. */
     suspend fun exportHar(): String
+
+    /** Writes captured requests as a Postman Collection v2.1 JSON file into app storage and
+     *  returns the path - more useful than raw curl/HAR when the user wants to keep building on
+     *  a discovered API in Postman/Insomnia rather than just replaying one call. */
+    suspend fun exportPostman(): String
+
+    /** All cookies (name, value, and flags like HttpOnly/Secure/SameSite where available) for the
+     *  current page's domain, as its own inspectable result - previously only visible bundled
+     *  inside a get_curl header dump. */
+    suspend fun getCookies(): String
+
+    /** Scans captured response headers across all requests for rate-limit signals
+     *  (X-RateLimit-*, RateLimit-*, Retry-After) and summarizes what the API's actual limits
+     *  look like, instead of the agent having to notice/compute this itself from raw headers. */
+    suspend fun findRateLimits(): String
+
+    /** De-duplicated, path-grouped summary of every distinct API endpoint captured this session
+     *  (method + path, with a count and an example full URL) - the "what does this site's API
+     *  surface look like" answer, as opposed to a raw chronological request log. Also flags when
+     *  responses look like WebAssembly, since that's a sign the real logic isn't reverse-
+     *  engineerable from network traffic alone. */
+    suspend fun listEndpoints(): String
+
+    /** Looks across every captured call to each distinct endpoint path (3+ calls) and reports
+     *  which single query/body param changed between them, in case a pagination/cursor pattern
+     *  is visible from natural browsing alone rather than needing a manual two-request diff. */
+    suspend fun detectPagination(): String
+
+    /** Clicks the first element matching a CSS selector (or containing given text, for buttons/
+     *  links without a stable selector) and waits briefly for any resulting navigation/DOM change. */
+    suspend fun clickElement(selector: String): Boolean
+
+    /** Types text into the first element matching a CSS selector (input/textarea), dispatching
+     *  proper input/change events so frameworks like React pick up the change, not just the DOM. */
+    suspend fun typeIntoElement(selector: String, text: String): Boolean
+
+    /** Scrolls the first element matching a CSS selector into view (or scrolls the page by a
+     *  given number of pixels when no selector is given), useful before clicking something
+     *  currently off-screen or to trigger infinite-scroll/lazy-load content. */
+    suspend fun scrollTo(selector: String?, pixels: Int?): Boolean
+
+    /** Polls (up to ~5s) for a CSS selector to appear in the DOM before returning, for pages
+     *  where the next action depends on something finishing loading first. */
+    suspend fun waitForElement(selector: String): Boolean
+
+    /** Captures the current WebView content to a PNG file in app storage and returns the path -
+     *  for visually confirming a result (a toast, a modal, a redirect) rather than only trusting
+     *  network/DOM state. This captures a file for the user to open; it is not fed back to the
+     *  model for visual inspection (that needs a vision-capable model + multimodal message
+     *  support, which isn't wired up yet). */
+    suspend fun takeScreenshot(): String
 }
 
 data class AgentLink(val text: String, val href: String)

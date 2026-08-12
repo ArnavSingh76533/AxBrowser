@@ -19,6 +19,14 @@ data class OpenRouterModel(
 
 data class ChatTurn(val role: String, val content: String)
 
+/** A model reply plus token usage for this one call, when OpenRouter reports it (not all
+ *  providers behind OpenRouter include `usage` on every response, so these default to 0). */
+data class ChatCompletionResult(
+    val content: String,
+    val promptTokens: Int = 0,
+    val completionTokens: Int = 0
+)
+
 /**
  * Thin OpenAI-compatible client for OpenRouter (https://openrouter.ai). Only
  * plain chat completions are used - tool/function calling support varies a
@@ -32,7 +40,7 @@ class OpenRouterClient @Inject constructor(
 ) {
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
 
-    suspend fun chat(apiKey: String, model: String, messages: List<ChatTurn>, temperature: Double = 0.4): Result<String> =
+    suspend fun chat(apiKey: String, model: String, messages: List<ChatTurn>, temperature: Double = 0.4): Result<ChatCompletionResult> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val messagesJson = JSONArray().apply {
@@ -84,7 +92,12 @@ class OpenRouterClient @Inject constructor(
                         val finishReason = choices.getJSONObject(0).optString("finish_reason").ifBlank { "unknown" }
                         error("Model returned an empty message (finish_reason: $finishReason). Raw response: ${raw.take(500)}")
                     }
-                    content
+                    val usage = json.optJSONObject("usage")
+                    ChatCompletionResult(
+                        content = content,
+                        promptTokens = usage?.optInt("prompt_tokens", 0) ?: 0,
+                        completionTokens = usage?.optInt("completion_tokens", 0) ?: 0
+                    )
                 }
             }.recoverCatching { throwable ->
                 // Give network/IO failures (timeout, no connection, DNS, TLS, ...) a clearer label
