@@ -76,6 +76,12 @@ jobs:
 
     - name: Create/update nightly GitHub Release
       if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      # Non-blocking: this is a convenience "latest nightly" pointer, not the actual deliverable
+      # (the per-commit APK from "Upload Debug APK" above already succeeds independently). Rapid
+      # successive pushes to main can race two runs updating the same "nightly" tag/release at
+      # once and cause a transient conflict here - that shouldn't fail the whole build/test job
+      # when the actual code compiled, tests passed, and the artifact is already uploaded.
+      continue-on-error: true
       uses: softprops/action-gh-release@v2
       with:
         tag_name: nightly
