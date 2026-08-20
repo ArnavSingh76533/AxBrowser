@@ -63,10 +63,13 @@ jobs:
 
     - name: Upload Debug APK
       uses: actions/upload-artifact@v4
+      # overwrite: true so a re-run of the same commit (same github.sha -> same artifact name)
+      # doesn't fail with "an artifact with this name already exists" against a previous attempt.
       with:
         name: AxBrowser-debug-${{ github.sha }}
         path: app/build/outputs/apk/debug/*.apk
         retention-days: 14
+        overwrite: true
 
     - name: Publish rolling nightly release
       if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -99,6 +102,7 @@ jobs:
         name: test-results-${{ github.sha }}
         path: '**/build/reports/tests/'
         retention-days: 7
+        overwrite: true
 
     - name: Upload Lint Report
       uses: actions/upload-artifact@v4
@@ -107,3 +111,4 @@ jobs:
         name: lint-report-${{ github.sha }}
         path: '**/build/reports/lint-results*.html'
         retention-days: 7
+        overwrite: true
