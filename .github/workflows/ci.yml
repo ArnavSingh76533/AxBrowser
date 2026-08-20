@@ -96,11 +96,9 @@ jobs:
         APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -1)
         # Telegram caption is capped at 1024 chars and caption text is sent as a form field, not
         # interpolated into a shell command, so a commit message containing quotes/backticks/$()
-        # can't do anything unexpected here.
-        CAPTION="AxBrowser nightly v${VERSION}
-Commit: ${COMMIT_SHA:0:7}
-
-${COMMIT_MSG}"
+        # can't do anything unexpected here. printf (not an embedded literal newline) keeps every
+        # line of this step properly indented as valid YAML.
+        CAPTION=$(printf 'AxBrowser nightly v%s\nCommit: %s\n\n%s' "$VERSION" "${COMMIT_SHA:0:7}" "$COMMIT_MSG")
         CAPTION="${CAPTION:0:1024}"
         curl -sS -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument" \
           -F "chat_id=${CHAT_ID}" \
