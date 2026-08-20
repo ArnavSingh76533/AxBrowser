@@ -75,36 +75,6 @@ jobs:
         retention-days: 1
         overwrite: true
 
-    - name: Send build to Telegram
-      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-      # Primary distribution channel. continue-on-error because a Telegram API hiccup (or a
-      # >50MB APK, which Telegram's sendDocument caps at) shouldn't fail the build/test signal -
-      # the code already compiled and passed tests by this point regardless of whether this send
-      # succeeds.
-      continue-on-error: true
-      env:
-        BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        COMMIT_MSG: ${{ github.event.head_commit.message }}
-        COMMIT_SHA: ${{ github.sha }}
-        VERSION: ${{ steps.nightlyversion.outputs.VERSION }}
-      run: |
-        if [ -z "$BOT_TOKEN" ] || [ -z "$CHAT_ID" ]; then
-          echo "Telegram secrets not set, skipping."
-          exit 0
-        fi
-        APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -1)
-        # Telegram caption is capped at 1024 chars and caption text is sent as a form field, not
-        # interpolated into a shell command, so a commit message containing quotes/backticks/$()
-        # can't do anything unexpected here. printf (not an embedded literal newline) keeps every
-        # line of this step properly indented as valid YAML.
-        CAPTION=$(printf 'AxBrowser nightly v%s\nCommit: %s\n\n%s' "$VERSION" "${COMMIT_SHA:0:7}" "$COMMIT_MSG")
-        CAPTION="${CAPTION:0:1024}"
-        curl -sS -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument" \
-          -F "chat_id=${CHAT_ID}" \
-          -F "document=@${APK}" \
-          -F "caption=${CAPTION}"
-
     - name: Publish rolling nightly release
       if: github.ref == 'refs/heads/main' && github.event_name == 'push'
       run: |
@@ -114,7 +84,7 @@ jobs:
     - name: Create/update nightly GitHub Release
       if: github.ref == 'refs/heads/main' && github.event_name == 'push'
       # Non-blocking: this is a convenience "latest nightly" pointer, not the actual deliverable
-      # (Telegram above, and the per-commit APK from "Upload Debug APK", already cover that).
+      # (Telegram below, and the per-commit APK from "Upload Debug APK", already cover that).
       continue-on-error: true
       uses: softprops/action-gh-release@v2
       with:
@@ -125,6 +95,41 @@ jobs:
         files: AxBrowser-nightly.apk
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Send build to Telegram
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      # Sends a message with a direct download LINK, not the APK file itself. Telegram's Bot API
+      # (the standard api.telegram.org endpoint, as opposed to running your own local Bot API
+      # server) hard-caps sendDocument at 50MB - this debug APK is ~120MB, so a direct upload
+      # gets rejected with 413 Request Entity Too Large every time, no amount of retrying or
+      # compression fixes that (the APK is already a compressed zip archive). The GitHub release
+      # asset published in the previous step (public, no auth needed to download) is the actual
+      # file host; this step runs after it so the link is guaranteed live.
+      continue-on-error: true
+      env:
+        BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        COMMIT_MSG: ${{ github.event.head_commit.message }}
+        COMMIT_SHA: ${{ github.sha }}
+        VERSION: ${{ steps.nightlyversion.outputs.VERSION }}
+        REPO: ${{ github.repository }}
+      run: |
+        if [ -z "$BOT_TOKEN" ] || [ -z "$CHAT_ID" ]; then
+          echo "Telegram secrets not set, skipping."
+          exit 0
+        fi
+        APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -1)
+        SIZE_MB=$(du -m "$APK" | cut -f1)
+        DOWNLOAD_URL="https://github.com/${REPO}/releases/download/nightly/AxBrowser-nightly.apk"
+        # Message text is capped at 4096 chars and sent as a form field, not interpolated into a
+        # shell command, so a commit message containing quotes/backticks/$() can't do anything
+        # unexpected here. printf (not an embedded literal newline) keeps this step's YAML valid.
+        TEXT=$(printf 'AxBrowser nightly v%s (%sMB)\nCommit: %s\n\n%s\n\nDownload: %s' \
+          "$VERSION" "$SIZE_MB" "${COMMIT_SHA:0:7}" "$COMMIT_MSG" "$DOWNLOAD_URL")
+        TEXT="${TEXT:0:4096}"
+        curl -sS -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+          -F "chat_id=${CHAT_ID}" \
+          -F "text=${TEXT}"
 
     - name: Upload Test Results
       uses: actions/upload-artifact@v4
