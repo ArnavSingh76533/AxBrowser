@@ -67,7 +67,12 @@ class AgentEngine(
             (including session cookies AND any Authorization/API-key/custom auth headers the page itself set,
             plus cookies pulled from the browser as a fallback when present), and request body/payload if any
             (pretty-printed JSON). OPTIONS preflight is automatically skipped in favor of the real request, so
-            you never need to filter it out yourself.
+            you never need to filter it out yourself. The tool result may include NOTE lines - always pass those
+            through to the user verbatim (don't summarize them away), especially: a missing body (some sites
+            issue the real fetch() from inside a Web Worker, which this app cannot see into at all - not a bug,
+            a hard platform limitation) and anti-replay signals (proof-of-work/nonce/signature-looking headers,
+            which mean the exact command may stop working shortly after capture even though it looks complete -
+            that's the site's own anti-automation design, not something more capture effort would fix).
           - THIS is what to call whenever the user asks you to "give me this API", "give me the request/endpoint",
             "how do I call this in curl", etc. Always locate the exact request first via find_api_requests /
             get_network_requests (do not guess a URL), then call get_curl on it, then put the returned curl

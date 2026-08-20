@@ -1104,16 +1104,25 @@ fun BrowserScreen(
                 val curl = match.toCurl(extra, sanitize = sanitized)
                 val authNote = match.authHeaderNames
                 val bodyNote = if (!match.method.equals("GET", ignoreCase = true) && match.requestBody.isBlank()) {
-                    "\n\n# NOTE: no request body was captured for this call. If this was a POST/PUT made via a plain " +
-                        "HTML <form> submit (not JS fetch/XHR), the browser has no API to read that body - only " +
-                        "JS-driven requests can be captured with their payload."
+                    "\n\n# NOTE: no request body was captured for this call. Either it was a plain HTML <form> submit " +
+                        "(Android's WebView API can't read POST bodies at all for those), OR - if this looks like it " +
+                        "should have a JSON body - the site likely issues this fetch() from inside a Web Worker rather " +
+                        "than the main page. Only main-page fetch/XHR calls are visible to this capture; a worker has " +
+                        "its own separate JS scope this app has no way to hook into or read from."
+                } else ""
+                val antiReplayNote = if (match.hasLikelyAntiReplayHeaders && !sanitized) {
+                    "\n\n# NOTE: this request also carries what looks like a solved anti-bot challenge or a short-lived " +
+                        "signed/rotating token, not a stable reusable key. Even with the full body, this exact command " +
+                        "may be REJECTED if you run it later or from a different device/IP - that's the site's anti-" +
+                        "automation working as intended, not a capture bug. It's most likely to still work if you run " +
+                        "it again immediately, from the same network."
                 } else ""
                 if (authNote.isNotEmpty() && !sanitized) {
                     return "$curl\n\n# NOTE: this request carries auth via: ${authNote.joinToString(", ")} \u2014 " +
                         "tied to your own logged-in session on this site. Treat it like a password: don't post it " +
-                        "publicly or share it with anyone else.$bodyNote"
+                        "publicly or share it with anyone else.$bodyNote$antiReplayNote"
                 }
-                return curl + bodyNote
+                return curl + bodyNote + antiReplayNote
             }
 
             override suspend fun getResponseBody(urlFilter: String): String? {

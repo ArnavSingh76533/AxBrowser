@@ -85,6 +85,18 @@ data class NetworkRequest(
             return requestHeaders.keys.filter { it.lowercase() in authLike }
         }
 
+    /** True when this request carries headers that look like a solved anti-bot challenge or a
+     *  short-lived signed/rotating token (proof-of-work responses, nonces, per-request
+     *  signatures) rather than a stable, reusable credential. A captured curl for a request like
+     *  this can look complete and still fail on replay once the challenge/nonce expires - that's
+     *  the site's anti-automation working as intended, not a capture bug, and the agent should
+     *  say so instead of implying the command is guaranteed to work. */
+    val hasLikelyAntiReplayHeaders: Boolean
+        get() {
+            val signals = listOf("pow", "challenge", "nonce", "signature", "hif-", "captcha", "fp-", "fingerprint", "attestation")
+            return requestHeaders.keys.any { key -> signals.any { key.lowercase().contains(it) } }
+        }
+
     /** Builds a runnable curl command reproducing this request. [extraHeaders] (e.g. Cookie
      *  pulled from CookieManager when the page never set it via JS) are merged in without
      *  overriding anything already captured on the request itself. When [sanitize] is true,
