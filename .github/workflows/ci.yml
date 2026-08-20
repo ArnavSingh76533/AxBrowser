@@ -63,13 +63,49 @@ jobs:
 
     - name: Upload Debug APK
       uses: actions/upload-artifact@v4
-      # overwrite: true so a re-run of the same commit (same github.sha -> same artifact name)
-      # doesn't fail with "an artifact with this name already exists" against a previous attempt.
+      # Fixed name (not per-sha) + overwrite:true + short retention: GitHub only ever keeps ONE
+      # copy of this artifact at a time now, instead of accumulating a new ~120MB blob on every
+      # push. That accumulation (116 old artifacts, ~6GB) is what tripped "Artifact storage quota
+      # has been hit" and started failing every upload. Telegram (below) is now the real
+      # distribution channel; this is just a same-day debug copy for convenience.
+      continue-on-error: true
       with:
-        name: AxBrowser-debug-${{ github.sha }}
+        name: AxBrowser-debug-latest
         path: app/build/outputs/apk/debug/*.apk
-        retention-days: 14
+        retention-days: 1
         overwrite: true
+
+    - name: Send build to Telegram
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      # Primary distribution channel. continue-on-error because a Telegram API hiccup (or a
+      # >50MB APK, which Telegram's sendDocument caps at) shouldn't fail the build/test signal -
+      # the code already compiled and passed tests by this point regardless of whether this send
+      # succeeds.
+      continue-on-error: true
+      env:
+        BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        COMMIT_MSG: ${{ github.event.head_commit.message }}
+        COMMIT_SHA: ${{ github.sha }}
+        VERSION: ${{ steps.nightlyversion.outputs.VERSION }}
+      run: |
+        if [ -z "$BOT_TOKEN" ] || [ -z "$CHAT_ID" ]; then
+          echo "Telegram secrets not set, skipping."
+          exit 0
+        fi
+        APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -1)
+        # Telegram caption is capped at 1024 chars and caption text is sent as a form field, not
+        # interpolated into a shell command, so a commit message containing quotes/backticks/$()
+        # can't do anything unexpected here.
+        CAPTION="AxBrowser nightly v${VERSION}
+Commit: ${COMMIT_SHA:0:7}
+
+${COMMIT_MSG}"
+        CAPTION="${CAPTION:0:1024}"
+        curl -sS -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument" \
+          -F "chat_id=${CHAT_ID}" \
+          -F "document=@${APK}" \
+          -F "caption=${CAPTION}"
 
     - name: Publish rolling nightly release
       if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -80,10 +116,7 @@ jobs:
     - name: Create/update nightly GitHub Release
       if: github.ref == 'refs/heads/main' && github.event_name == 'push'
       # Non-blocking: this is a convenience "latest nightly" pointer, not the actual deliverable
-      # (the per-commit APK from "Upload Debug APK" above already succeeds independently). Rapid
-      # successive pushes to main can race two runs updating the same "nightly" tag/release at
-      # once and cause a transient conflict here - that shouldn't fail the whole build/test job
-      # when the actual code compiled, tests passed, and the artifact is already uploaded.
+      # (Telegram above, and the per-commit APK from "Upload Debug APK", already cover that).
       continue-on-error: true
       uses: softprops/action-gh-release@v2
       with:
@@ -98,17 +131,19 @@ jobs:
     - name: Upload Test Results
       uses: actions/upload-artifact@v4
       if: always()
+      continue-on-error: true
       with:
-        name: test-results-${{ github.sha }}
+        name: test-results-latest
         path: '**/build/reports/tests/'
-        retention-days: 7
+        retention-days: 1
         overwrite: true
 
     - name: Upload Lint Report
       uses: actions/upload-artifact@v4
       if: always()
+      continue-on-error: true
       with:
-        name: lint-report-${{ github.sha }}
+        name: lint-report-latest
         path: '**/build/reports/lint-results*.html'
-        retention-days: 7
+        retention-days: 1
         overwrite: true
