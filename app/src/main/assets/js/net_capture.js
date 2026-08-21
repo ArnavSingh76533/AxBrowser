@@ -240,4 +240,119 @@
             });
         } catch (e) {}
     }, true);
+
+    // --- Worker-issued fetch capture (best-effort, defensive) ---
+    // Some sites issue their real API calls from inside a dedicated Worker instead of the main
+    // page - a known technique to dodge exactly this kind of page-script network capture (seen
+    // on sites running a proof-of-work/anti-bot challenge, which is typically computed off the
+    // main thread for performance). window.fetch above only patches the main page; a worker has
+    // its own separate self.fetch, and no bridge back to native code at all.
+    //
+    // This tries to inject the same style of capture hook into same-origin worker scripts before
+    // they run, by re-fetching the worker's source, prepending a hook, and constructing the real
+    // worker from a Blob URL instead. Capture data is relayed back via a dedicated BroadcastChannel
+    // - NOT the worker's own postMessage/onmessage channel - specifically so this never touches,
+    // filters, or risks interfering with however the page actually talks to its own worker.
+    //
+    // Every failure mode (cross-origin script, CORS, module workers, BroadcastChannel missing,
+    // any thrown error) falls back to the exact original, completely unmodified Worker - this
+    // only ever adds capture on top of working sites, never risks breaking one.
+    if (typeof window.Worker !== 'undefined' && typeof window.BroadcastChannel !== 'undefined') {
+        try {
+            var OrigWorker = window.Worker;
+            var CAPTURE_CHANNEL = '__axnet_worker_capture__';
+            var listenChannel = new BroadcastChannel(CAPTURE_CHANNEL);
+            listenChannel.onmessage = function (e) { try { post(e.data); } catch (err) {} };
+
+            var WORKER_SHIM = [
+                '(function(){try{',
+                '  var __axC = new BroadcastChannel(' + JSON.stringify(CAPTURE_CHANNEL) + ');',
+                '  var __axOF = self.fetch;',
+                '  if (typeof __axOF === "function") {',
+                '    self.fetch = function(input, init) {',
+                '      var url = typeof input === "string" ? input : (input && input.url) || "";',
+                '      var method = (init && init.method) || (input && input.method) || "GET";',
+                '      var reqBody = (init && init.body) || "";',
+                '      var t0 = Date.now();',
+                '      return __axOF.apply(self, arguments).then(function(resp) {',
+                '        try {',
+                '          var rh = {}; resp.headers.forEach(function(v,k){ rh[k]=v; });',
+                '          resp.clone().text().then(function(bt) {',
+                '            try {',
+                '              __axC.postMessage({source:"worker-fetch", url:url, method:method, status:resp.status,',
+                '                reqBody:String(reqBody).slice(0,4096), reqHeaders:(init && init.headers)||{},',
+                '                respBody:bt.slice(0,4096), respHeaders:rh, durationMs:Date.now()-t0,',
+                '                mimeType:resp.headers.get("content-type")||""});',
+                '            } catch(e) {}',
+                '          }).catch(function(){});',
+                '        } catch(e) {}',
+                '        return resp;',
+                '      });',
+                '    };',
+                '  }',
+                '}catch(e){}})();',
+                ''
+            ].join('\n');
+
+            window.Worker = function (scriptURL, options) {
+                // Module workers can't have arbitrary code prepended (ES module syntax requires
+                // import statements at the top of the file) - pass those through untouched.
+                if (options && options.type === 'module') return new OrigWorker(scriptURL, options);
+
+                var real = null, ready = false;
+                var queuedMessages = [], queuedListeners = [];
+                var userOnMessage = null, userOnError = null, userOnMessageError = null;
+
+                function finish(w) {
+                    real = w;
+                    queuedListeners.forEach(function (l) { real.addEventListener(l[0], l[1], l[2]); });
+                    if (userOnMessage) real.onmessage = userOnMessage;
+                    if (userOnError) real.onerror = userOnError;
+                    if (userOnMessageError) real.onmessageerror = userOnMessageError;
+                    queuedMessages.forEach(function (args) { real.postMessage.apply(real, args); });
+                    ready = true;
+                }
+
+                try {
+                    var resolvedUrl = new URL(scriptURL, location.href).toString();
+                    fetch(resolvedUrl).then(function (r) {
+                        if (!r.ok) throw new Error('fetch failed: ' + r.status);
+                        return r.text();
+                    }).then(function (src) {
+                        var blob = new Blob([WORKER_SHIM + src], { type: 'application/javascript' });
+                        var blobUrl = URL.createObjectURL(blob);
+                        finish(new OrigWorker(blobUrl, options));
+                    }).catch(function () {
+                        // Cross-origin, CORS-blocked, network error - fall back untouched, no capture.
+                        finish(new OrigWorker(scriptURL, options));
+                    });
+                } catch (e) {
+                    finish(new OrigWorker(scriptURL, options));
+                }
+
+                var proxy = {
+                    postMessage: function () {
+                        if (ready) real.postMessage.apply(real, arguments); else queuedMessages.push(arguments);
+                    },
+                    terminate: function () { if (ready) real.terminate(); },
+                    addEventListener: function (type, fn, opts) {
+                        if (ready) real.addEventListener(type, fn, opts); else queuedListeners.push([type, fn, opts]);
+                    },
+                    removeEventListener: function (type, fn, opts) { if (ready) real.removeEventListener(type, fn, opts); },
+                    dispatchEvent: function (evt) { return ready ? real.dispatchEvent(evt) : false; },
+                    get onmessage() { return userOnMessage; },
+                    set onmessage(fn) { userOnMessage = fn; if (ready) real.onmessage = fn; },
+                    get onerror() { return userOnError; },
+                    set onerror(fn) { userOnError = fn; if (ready) real.onerror = fn; },
+                    get onmessageerror() { return userOnMessageError; },
+                    set onmessageerror(fn) { userOnMessageError = fn; if (ready) real.onmessageerror = fn; }
+                };
+                // So `instanceof Worker` still holds true for code that checks it, even though
+                // this is a plain proxy object rather than a real Worker instance under the hood.
+                Object.setPrototypeOf(proxy, OrigWorker.prototype);
+                return proxy;
+            };
+            window.Worker.prototype = OrigWorker.prototype;
+        } catch (e) { /* leave window.Worker completely untouched on any setup error */ }
+    }
 })();
