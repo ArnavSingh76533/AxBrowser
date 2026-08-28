@@ -67,11 +67,14 @@
     }
 
     // --- fetch() ---
-    var origFetch = window.fetch;
-    if (origFetch) {
-        window.fetch = function (input, init) {
+    // Wrapped in a function so the exact same hook can be applied to any same-origin realm
+    // (the top page, and now also same-origin iframes below) - not just `window`.
+    function patchFetch(win) {
+        var origFetch = win.fetch;
+        if (!origFetch) return;
+        win.fetch = function (input, init) {
             var start = Date.now();
-            var isRequestObj = typeof Request !== 'undefined' && input instanceof Request;
+            var isRequestObj = typeof win.Request !== 'undefined' && input instanceof win.Request;
             var url = (typeof input === 'string') ? input : (input && input.url) || '';
             var method = (init && init.method) || (input && input.method) || 'GET';
             var reqHeaders = headersToMap(init && init.headers);
@@ -125,41 +128,45 @@
     }
 
     // --- XMLHttpRequest ---
-    var origOpen = XMLHttpRequest.prototype.open;
-    var origSend = XMLHttpRequest.prototype.send;
-    var origSetHeader = XMLHttpRequest.prototype.setRequestHeader;
-    XMLHttpRequest.prototype.open = function (method, url) {
-        this.__ax = { method: method, url: url, start: 0, reqHeaders: {} };
-        return origOpen.apply(this, arguments);
-    };
-    XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
-        if (this.__ax) this.__ax.reqHeaders[name] = value;
-        return origSetHeader.apply(this, arguments);
-    };
-    XMLHttpRequest.prototype.send = function (body) {
-        var xhr = this;
-        if (xhr.__ax) {
-            xhr.__ax.start = Date.now();
-            xhr.__ax.rawBody = body;
-            xhr.addEventListener('loadend', function () {
-                var respBody = '';
-                try {
-                    if (xhr.responseType === '' || xhr.responseType === 'text') respBody = xhr.responseText;
-                } catch (e) {}
-                coerceBodyToText(xhr.__ax.rawBody).then(function (reqBodyText) {
-                    post({
-                        source: 'xhr', url: xhr.__ax.url, method: xhr.__ax.method,
-                        status: xhr.status, reqBody: trunc(reqBodyText || ''), reqHeaders: xhr.__ax.reqHeaders,
-                        respBody: trunc(respBody),
-                        respHeaders: parseHeaders(xhr.getAllResponseHeaders()),
-                        durationMs: Date.now() - xhr.__ax.start,
-                        type: xhr.getResponseHeader ? (xhr.getResponseHeader('content-type') || '') : ''
+    function patchXhr(win) {
+        var XHR = win.XMLHttpRequest;
+        if (!XHR) return;
+        var origOpen = XHR.prototype.open;
+        var origSend = XHR.prototype.send;
+        var origSetHeader = XHR.prototype.setRequestHeader;
+        XHR.prototype.open = function (method, url) {
+            this.__ax = { method: method, url: url, start: 0, reqHeaders: {} };
+            return origOpen.apply(this, arguments);
+        };
+        XHR.prototype.setRequestHeader = function (name, value) {
+            if (this.__ax) this.__ax.reqHeaders[name] = value;
+            return origSetHeader.apply(this, arguments);
+        };
+        XHR.prototype.send = function (body) {
+            var xhr = this;
+            if (xhr.__ax) {
+                xhr.__ax.start = Date.now();
+                xhr.__ax.rawBody = body;
+                xhr.addEventListener('loadend', function () {
+                    var respBody = '';
+                    try {
+                        if (xhr.responseType === '' || xhr.responseType === 'text') respBody = xhr.responseText;
+                    } catch (e) {}
+                    coerceBodyToText(xhr.__ax.rawBody).then(function (reqBodyText) {
+                        post({
+                            source: 'xhr', url: xhr.__ax.url, method: xhr.__ax.method,
+                            status: xhr.status, reqBody: trunc(reqBodyText || ''), reqHeaders: xhr.__ax.reqHeaders,
+                            respBody: trunc(respBody),
+                            respHeaders: parseHeaders(xhr.getAllResponseHeaders()),
+                            durationMs: Date.now() - xhr.__ax.start,
+                            type: xhr.getResponseHeader ? (xhr.getResponseHeader('content-type') || '') : ''
+                        });
                     });
                 });
-            });
-        }
-        return origSend.apply(this, arguments);
-    };
+            }
+            return origSend.apply(this, arguments);
+        };
+    }
 
     function parseHeaders(raw) {
         var out = {};
@@ -175,9 +182,10 @@
     // Captures connection open (url + protocols) and each frame sent/received so the
     // agent can reverse-engineer realtime APIs (live prices, chat, notifications, ...)
     // the same way it does REST/GraphQL - previously invisible to the dev console.
-    var OrigWebSocket = window.WebSocket;
-    if (OrigWebSocket) {
-        window.WebSocket = function (url, protocols) {
+    function patchWebSocket(win) {
+        var OrigWebSocket = win.WebSocket;
+        if (!OrigWebSocket) return;
+        win.WebSocket = function (url, protocols) {
             var ws = protocols !== undefined ? new OrigWebSocket(url, protocols) : new OrigWebSocket(url);
             post({ source: 'websocket', url: String(url), method: 'OPEN', status: null,
                 reqBody: '', respBody: '', durationMs: 0,
@@ -208,12 +216,20 @@
 
             return ws;
         };
-        window.WebSocket.prototype = OrigWebSocket.prototype;
-        window.WebSocket.CONNECTING = OrigWebSocket.CONNECTING;
-        window.WebSocket.OPEN = OrigWebSocket.OPEN;
-        window.WebSocket.CLOSING = OrigWebSocket.CLOSING;
-        window.WebSocket.CLOSED = OrigWebSocket.CLOSED;
+        win.WebSocket.prototype = OrigWebSocket.prototype;
+        win.WebSocket.CONNECTING = OrigWebSocket.CONNECTING;
+        win.WebSocket.OPEN = OrigWebSocket.OPEN;
+        win.WebSocket.CLOSING = OrigWebSocket.CLOSING;
+        win.WebSocket.CLOSED = OrigWebSocket.CLOSED;
     }
+
+    function patchRealm(win) {
+        try { patchFetch(win); } catch (e) {}
+        try { patchXhr(win); } catch (e) {}
+        try { patchWebSocket(win); } catch (e) {}
+    }
+
+    patchRealm(window);
 
     // --- native <form> submissions ---
     // A plain HTML form (method="post", no JS) never touches fetch/XHR at all, so the hooks
@@ -355,4 +371,75 @@
             window.Worker.prototype = OrigWorker.prototype;
         } catch (e) { /* leave window.Worker completely untouched on any setup error */ }
     }
+
+    // --- same-origin iframe capture ---
+    // A cross-origin iframe (ads, embeds, payment widgets from another domain) is fundamentally
+    // inaccessible to page JS - that's the browser's same-origin policy working as intended, not
+    // something to work around, and this doesn't try to. A SAME-origin iframe, though, shares JS
+    // accessibility with the parent page the same way a same-origin popup would, and today those
+    // requests are invisible to the capture above because it only ever ran in the top frame.
+    //
+    // Every accessible-property read below is wrapped in try/catch: a cross-origin iframe throws
+    // a SecurityError on the very first property access (win.fetch), which is caught silently -
+    // exactly the same fallback shape as the Worker hook above. This can only ever add capture on
+    // top of a working page, never break one, since it never touches iframe navigation or content,
+    // only patches functions inside realms it can already read from.
+    (function () {
+        var patchedWindows = (typeof WeakSet !== 'undefined') ? new WeakSet() : null;
+        function alreadyPatched(win) {
+            if (!patchedWindows) return false;
+            try { return patchedWindows.has(win); } catch (e) { return false; }
+        }
+        function markPatched(win) {
+            if (patchedWindows) { try { patchedWindows.add(win); } catch (e) {} }
+        }
+
+        function tryPatchIframe(iframe, depth) {
+            if (depth > 4) return; // bound recursion for deeply nested same-origin iframes
+            try {
+                var win = iframe.contentWindow;
+                if (!win || alreadyPatched(win)) return;
+                // This line is the actual same-origin check: reading .fetch on a cross-origin
+                // contentWindow throws immediately, before any patching happens.
+                var probe = win.fetch;
+                markPatched(win);
+                patchRealm(win);
+                scanForIframes(win.document, depth + 1);
+            } catch (e) { /* cross-origin or not yet navigated - skip silently */ }
+        }
+
+        function scanForIframes(doc, depth) {
+            try {
+                var frames = doc.querySelectorAll('iframe');
+                for (var i = 0; i < frames.length; i++) {
+                    var frame = frames[i];
+                    tryPatchIframe(frame, depth);
+                    // Same-origin iframes still already loaded when this script first ran get
+                    // caught by the immediate attempt above; ones that load/navigate afterward
+                    // (or weren't same-origin yet at insertion time) get a second chance here.
+                    frame.addEventListener('load', function () { tryPatchIframe(this, depth); });
+                }
+            } catch (e) {}
+        }
+
+        try {
+            scanForIframes(document, 0);
+            if (typeof MutationObserver !== 'undefined') {
+                var observer = new MutationObserver(function (mutations) {
+                    mutations.forEach(function (m) {
+                        m.addedNodes && m.addedNodes.forEach(function (node) {
+                            if (!node || node.nodeType !== 1) return;
+                            if (node.tagName === 'IFRAME') {
+                                tryPatchIframe(node, 0);
+                                node.addEventListener('load', function () { tryPatchIframe(this, 0); });
+                            } else if (node.querySelectorAll) {
+                                scanForIframes(node, 0);
+                            }
+                        });
+                    });
+                });
+                observer.observe(document.documentElement || document, { childList: true, subtree: true });
+            }
+        } catch (e) { /* leave the page completely untouched on any setup error */ }
+    })();
 })();

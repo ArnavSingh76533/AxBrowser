@@ -1511,33 +1511,87 @@ fun BrowserScreen(
                 val all = com.akay.feature.browser.devconsole.NetworkInterceptor.requests.value.filter { it.isApiLike }
                 if (all.isEmpty()) return "No API-like requests captured yet - nothing to export."
                 return runCatching {
+                    // --- shared JSON -> OpenAPI schema inference, used for both request and response bodies ---
+                    fun jsonToSchema(v: Any?): org.json.JSONObject = org.json.JSONObject().apply {
+                        when (v) {
+                            null, org.json.JSONObject.NULL -> put("type", "string").also { put("nullable", true) }
+                            is String -> put("type", "string")
+                            is Boolean -> put("type", "boolean")
+                            is Int, is Long -> put("type", "integer")
+                            is Double, is Float -> put("type", "number")
+                            is org.json.JSONArray -> {
+                                put("type", "array")
+                                if (v.length() > 0) put("items", jsonToSchema(v.get(0))) else put("items", org.json.JSONObject())
+                            }
+                            is org.json.JSONObject -> {
+                                put("type", "object")
+                                val props = org.json.JSONObject()
+                                v.keys().forEach { k -> props.put(k, jsonToSchema(v.get(k))) }
+                                put("properties", props)
+                            }
+                            else -> put("type", "string")
+                        }
+                    }
+                    fun bodySchema(bodyText: String): org.json.JSONObject? {
+                        if (bodyText.isBlank()) return null
+                        val parsed = runCatching { org.json.JSONTokener(bodyText).nextValue() }.getOrNull() ?: return null
+                        return jsonToSchema(parsed)
+                    }
+
                     data class Key(val method: String, val path: String)
                     val grouped = all.groupBy { Key(it.method.uppercase(), domainOf(it.url) + runCatching { java.net.URI(it.url).path }.getOrDefault("")) }
                     val paths = org.json.JSONObject()
                     val servers = org.json.JSONArray()
                     all.map { "${runCatching { java.net.URI(it.url).scheme }.getOrNull() ?: "https"}://${domainOf(it.url)}" }
                         .distinct().forEach { servers.put(org.json.JSONObject().apply { put("url", it) }) }
+
+                    var usesBearer = false
+                    var usesCookie = false
+
                     grouped.entries.groupBy { it.key.path }.forEach { (path, entries) ->
                         val pathItem = org.json.JSONObject()
                         entries.forEach { (key, reqs) ->
-                            val example = reqs.last()
+                            // Merge query params across EVERY captured call to this endpoint, not just the
+                            // most recent one - a param only some calls used is real signal (it's optional
+                            // and does something), not noise to drop.
+                            val paramOccurrences = reqs.map { req ->
+                                runCatching { java.net.URI(req.url).query }.getOrNull()
+                                    ?.split("&")?.filter { it.contains("=") }
+                                    ?.map { it.substringBefore("=") }?.toSet() ?: emptySet()
+                            }
+                            val allParamNames = paramOccurrences.flatten().toSet()
                             val params = org.json.JSONArray()
-                            runCatching { java.net.URI(example.url).query }.getOrNull()?.split("&")?.filter { it.contains("=") }?.forEach { p ->
+                            allParamNames.sorted().forEach { name ->
+                                val presentInAll = paramOccurrences.all { name in it }
                                 params.put(org.json.JSONObject().apply {
-                                    put("name", p.substringBefore("="))
+                                    put("name", name)
                                     put("in", "query")
+                                    put("required", presentInAll)
                                     put("schema", org.json.JSONObject().apply { put("type", "string") })
                                 })
                             }
+
+                            val example = reqs.last()
+                            val exampleWithBody = reqs.lastOrNull { it.requestBody.isNotBlank() } ?: example
+                            val exampleWithResponse = reqs.lastOrNull { it.responseBody.isNotBlank() } ?: example
+
+                            val hasAuth = reqs.any { it.authHeaderNames.isNotEmpty() }
+                            val bearerHere = reqs.any { r -> r.requestHeaders.entries.any { it.key.equals("authorization", true) && it.value.startsWith("Bearer", true) } }
+                            val cookieHere = reqs.any { it.authHeaderNames.any { h -> h.equals("cookie", true) } }
+                            if (bearerHere) usesBearer = true
+                            if (cookieHere) usesCookie = true
+
                             val op = org.json.JSONObject().apply {
-                                put("summary", "Captured from AxBrowser session")
+                                put("summary", "Captured from AxBrowser session (${reqs.size} call${if (reqs.size == 1) "" else "s"} observed)")
                                 put("parameters", params)
-                                if (example.requestBody.isNotBlank()) {
+                                if (exampleWithBody.requestBody.isNotBlank()) {
+                                    val schema = bodySchema(exampleWithBody.requestBody)
                                     put("requestBody", org.json.JSONObject().apply {
                                         put("content", org.json.JSONObject().apply {
                                             put("application/json", org.json.JSONObject().apply {
-                                                put("example", runCatching { org.json.JSONObject(example.requestBody) }.getOrNull()
-                                                    ?: runCatching { org.json.JSONArray(example.requestBody) }.getOrNull() ?: example.requestBody)
+                                                if (schema != null) put("schema", schema)
+                                                put("example", runCatching { org.json.JSONObject(exampleWithBody.requestBody) }.getOrNull()
+                                                    ?: runCatching { org.json.JSONArray(exampleWithBody.requestBody) }.getOrNull() ?: exampleWithBody.requestBody)
                                             })
                                         })
                                     })
@@ -1545,13 +1599,36 @@ fun BrowserScreen(
                                 put("responses", org.json.JSONObject().apply {
                                     put((example.responseStatus ?: 200).toString(), org.json.JSONObject().apply {
                                         put("description", "Captured response")
+                                        if (exampleWithResponse.responseBody.isNotBlank()) {
+                                            val respSchema = bodySchema(exampleWithResponse.responseBody)
+                                            put("content", org.json.JSONObject().apply {
+                                                put("application/json", org.json.JSONObject().apply {
+                                                    if (respSchema != null) put("schema", respSchema)
+                                                })
+                                            })
+                                        }
                                     })
                                 })
+                                if (hasAuth) {
+                                    val schemes = org.json.JSONArray()
+                                    if (bearerHere) schemes.put(org.json.JSONObject().apply { put("bearerAuth", org.json.JSONArray()) })
+                                    if (cookieHere) schemes.put(org.json.JSONObject().apply { put("cookieAuth", org.json.JSONArray()) })
+                                    if (schemes.length() > 0) put("security", schemes)
+                                }
                             }
                             pathItem.put(key.method.lowercase(), op)
                         }
                         paths.put(path.ifBlank { "/" }, pathItem)
                     }
+
+                    val securitySchemes = org.json.JSONObject()
+                    if (usesBearer) securitySchemes.put("bearerAuth", org.json.JSONObject().apply {
+                        put("type", "http"); put("scheme", "bearer")
+                    })
+                    if (usesCookie) securitySchemes.put("cookieAuth", org.json.JSONObject().apply {
+                        put("type", "apiKey"); put("in", "cookie"); put("name", "session")
+                    })
+
                     val doc = org.json.JSONObject().apply {
                         put("openapi", "3.0.3")
                         put("info", org.json.JSONObject().apply {
@@ -1560,13 +1637,45 @@ fun BrowserScreen(
                         })
                         put("servers", servers)
                         put("paths", paths)
+                        if (securitySchemes.length() > 0) {
+                            put("components", org.json.JSONObject().apply { put("securitySchemes", securitySchemes) })
+                        }
                     }
                     val dir = java.io.File(context.filesDir, "openapi_exports").apply { mkdirs() }
                     val file = java.io.File(dir, "axbrowser_${System.currentTimeMillis()}.openapi.json")
                     file.writeText(doc.toString(2))
                     "Exported ${grouped.values.sumOf { it.size }} requests across ${paths.length()} paths to ${file.absolutePath} \u2014 " +
-                        "note this is inferred from observed traffic, not a real spec from the site, so treat field types as guesses to verify."
+                        "params/schemas are merged across every call observed to each endpoint (not just one example), " +
+                        "but this is still inferred from observed traffic, not a real spec from the site \u2014 treat field " +
+                        "types and which params are truly required as informed guesses to verify."
                 }.getOrElse { "Failed to export OpenAPI doc: ${it.message}" }
+            }
+
+            override suspend fun beautifyJs(urlOrCode: String): String {
+                val looksLikeUrl = urlOrCode.trimStart().startsWith("http://") || urlOrCode.trimStart().startsWith("https://")
+                val code = if (looksLikeUrl) {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        runCatching {
+                            java.net.URL(urlOrCode.trim()).openConnection().apply {
+                                connectTimeout = 8000; readTimeout = 8000
+                                setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android) AxBrowser")
+                            }.getInputStream().bufferedReader().use { it.readText() }
+                        }.getOrElse { return@withContext null }
+                    } ?: return "Couldn't fetch $urlOrCode - it may require auth/cookies this plain request doesn't carry, or be blocked. " +
+                        "If it's a request AxBrowser already captured, try get_response_body instead."
+                } else {
+                    urlOrCode
+                }
+                if (code.isBlank()) return "Nothing to beautify - empty input."
+                if (code.length > 200_000) {
+                    return "That's ${code.length} chars, too large to usefully reformat inline (truncating would just produce " +
+                        "broken JS). Try narrowing to a specific function via run_js instead, e.g. by extracting it as a string first."
+                }
+                return runCatching { beautifyJavaScript(code) }.getOrElse { "Failed to beautify: ${it.message}" } +
+                    "\n\n# NOTE: this is bracket/statement-based reformatting only (adds indentation and line breaks), not a real " +
+                    "JS parser or a deobfuscator - it won't undo variable renaming, string encoding, or control-flow flattening, " +
+                    "and regex literals containing / or quote characters can occasionally confuse it. Good for a first readable " +
+                    "look at minified code, not a substitute for careful manual analysis of genuinely obfuscated code."
             }
         }
     }
@@ -1836,10 +1945,73 @@ private fun captureAndShare(webView: WebView, context: Context): Boolean {
     }
 }
 
+/** Lightweight bracket/statement-based JS reformatter for [beautifyJs] - not a real parser, just
+ *  indentation-aware re-flowing so minified code is at least readable. Correctly tracks string
+ *  literals (single/double/template) and comments so it never re-flows text inside them; regex
+ *  literals aren't specially handled (a `/` inside one can be momentarily mistaken for a comment
+ *  start) since telling a regex literal from a division apart from a real parser is genuinely
+ *  ambiguous - documented as a known limitation to the caller rather than silently wrong. */
+private fun beautifyJavaScript(code: String): String {
+    val sb = StringBuilder()
+    var indent = 0
+    var i = 0
+    var inString: Char? = null
+    var inLineComment = false
+    var inBlockComment = false
+    val indentUnit = "  "
+
+    fun trimTrailingBlank() {
+        while (sb.isNotEmpty() && (sb.last() == ' ' || sb.last() == '\n')) sb.deleteCharAt(sb.length - 1)
+    }
+    fun newline() {
+        trimTrailingBlank()
+        sb.append('\n')
+        repeat(indent) { sb.append(indentUnit) }
+    }
+
+    while (i < code.length) {
+        val c = code[i]
+        val next = if (i + 1 < code.length) code[i + 1] else '\u0000'
+
+        if (inLineComment) {
+            sb.append(c)
+            if (c == '\n') inLineComment = false
+            i++; continue
+        }
+        if (inBlockComment) {
+            sb.append(c)
+            if (c == '*' && next == '/') { sb.append(next); i += 2; inBlockComment = false; continue }
+            i++; continue
+        }
+        if (inString != null) {
+            sb.append(c)
+            if (c == '\\' && i + 1 < code.length) { sb.append(next); i += 2; continue }
+            if (c == inString) inString = null
+            i++; continue
+        }
+
+        when {
+            c == '/' && next == '/' -> { inLineComment = true; sb.append(c) }
+            c == '/' && next == '*' -> { inBlockComment = true; sb.append(c) }
+            c == '\'' || c == '"' || c == '`' -> { inString = c; sb.append(c) }
+            c == '{' -> { sb.append(c); indent++; newline() }
+            c == '}' -> {
+                indent = maxOf(0, indent - 1)
+                newline()
+                sb.append(c)
+                if (next != ';' && next != ',' && next != ')' && next != '\n') newline()
+            }
+            c == ';' -> { sb.append(c); if (next != '\n') newline() }
+            else -> sb.append(c)
+        }
+        i++
+    }
+    return sb.toString().trim()
+}
+
 private fun prettifyUrl(url: String): String =
     url.removePrefix("https://").removePrefix("http://").removePrefix("www.")
         .let { if (it.length > 45) it.take(42) + "..." else it }
-
 private fun parseAndReportDomMedia(json: String) {
     try {
         val cleaned = json.trim().removeSurrounding("\"")

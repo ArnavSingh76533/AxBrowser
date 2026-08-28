@@ -169,6 +169,15 @@ interface AgentToolExecutor {
      *  storage, returning the path - for the user who wants a real spec to build a client
      *  against rather than one-off curl commands. */
     suspend fun exportOpenApi(): String
+
+    /** Reformats minified/obfuscated JavaScript (either fetched from a URL, or passed directly as
+     *  a code string) into indented, readable form - separating "hard to read" from "hard to
+     *  understand". This is a lightweight bracket/statement-based reformatter, not a real AST
+     *  parser or a variable-renaming deobfuscator - it can't undo control-flow flattening, string
+     *  encoding, or actual obfuscation techniques, only the "everything on one line" minification
+     *  that makes even simple scripts unreadable. Genuinely useful for a first look at a worker
+     *  script or bundle before deciding whether closer manual analysis is worth it. */
+    suspend fun beautifyJs(urlOrCode: String): String
 }
 
 data class AgentLink(val text: String, val href: String)

@@ -151,8 +151,16 @@ class AgentEngine(
         - list_watches: {} - every active background watch.
         - cancel_watch: {"label": "the watch's label"}
         - export_openapi: {} - writes an inferred OpenAPI 3.0 document from every API-like request captured this
-          session (grouped by path, with best-guess parameter/body shapes) and returns its path. Tell the user
-          it's inferred from observed traffic, not the site's real spec, so field types are guesses to verify.
+          session (grouped by path, with best-guess parameter/body shapes merged across every call to each
+          endpoint) and returns its path. Tell the user it's inferred from observed traffic, not the site's real
+          spec, so field types and required-ness are guesses to verify.
+        - beautify_js: {"url_or_code": "a URL to fetch and reformat, OR raw JS code to reformat directly"}
+          - reformats minified/obfuscated JS into readable indented form. This is bracket/statement-based
+            reformatting only (adds line breaks and indentation) - NOT a real parser or a deobfuscator, it can't
+            undo variable renaming or control-flow obfuscation. Useful for a first readable look at a worker
+            script or bundle (e.g. one found via find_auth_flow or a captured Worker's source) before deciding
+            whether it's worth understanding further. Always pass the tool's own NOTE about this limitation
+            through to the user rather than presenting the output as a real deobfuscation.
         - get_detected_media: {} - direct video/audio URLs already detected on the page (from network responses and
           <video>/<source>/<audio> tags). Often a better download target than the page URL itself, especially for
           sites that stream from a different domain than the page.
@@ -497,6 +505,7 @@ class AgentEngine(
             if (tools.cancelWatch(label)) "Cancelled watch \"$label\"." else "No watch found under \"$label\"."
         }
         "export_openapi" -> tools.exportOpenApi()
+        "beautify_js" -> tools.beautifyJs(input.optString("url_or_code"))
         "get_detected_media" -> {
             val results = tools.getDetectedMedia()
             if (results.isEmpty()) "No direct media URLs detected on this page yet."
