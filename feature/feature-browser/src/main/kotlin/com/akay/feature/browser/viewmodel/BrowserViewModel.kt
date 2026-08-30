@@ -77,7 +77,8 @@ class BrowserViewModel @Inject constructor(
     private val proxyManager: com.akay.core.data.proxy.ProxyManager,
     private val savedRequestDao: com.akay.core.data.db.dao.SavedRequestDao,
     private val siteNoteDao: com.akay.core.data.db.dao.SiteNoteDao,
-    private val watchDao: com.akay.core.data.db.dao.WatchDao
+    private val watchDao: com.akay.core.data.db.dao.WatchDao,
+    val axStorage: com.akay.core.data.storage.AxStorage
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(BrowserUiState())

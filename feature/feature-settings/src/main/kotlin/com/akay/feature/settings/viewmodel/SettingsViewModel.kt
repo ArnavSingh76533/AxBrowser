@@ -10,6 +10,7 @@ import com.akay.core.data.ai.OpenRouterClient
 import com.akay.core.data.ai.OpenRouterModel
 import com.akay.core.data.ai.presetForId
 import com.akay.core.data.datastore.AxPreferences
+import com.akay.core.data.storage.AxStorage
 import com.akay.core.data.userscript.UserScript
 import com.akay.core.data.userscript.UserScriptCodec
 import com.akay.core.domain.repository.HistoryRepository
@@ -71,7 +72,9 @@ data class SettingsUiState(
     val aiModelsLoading: Boolean = false,
     val aiModelsError: String? = null,
     val aiProvider: String = "openrouter",
-    val aiBaseUrl: String = "https://openrouter.ai/api/v1"
+    val aiBaseUrl: String = "https://openrouter.ai/api/v1",
+    val storageFolderConfigured: Boolean = false,
+    val storageFolderName: String? = null
 ) {
     val searchEngineName: String
         get() = SEARCH_ENGINES.firstOrNull { it.url == searchEngineUrl }?.name ?: "Custom"
@@ -82,6 +85,7 @@ class SettingsViewModel @Inject constructor(
     private val preferences: AxPreferences,
     private val historyRepository: HistoryRepository,
     private val openRouterClient: OpenRouterClient,
+    private val axStorage: AxStorage,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -95,6 +99,44 @@ class SettingsViewModel @Inject constructor(
         loadPreferences()
         viewModelScope.launch {
             preferences.userScripts.collect { _userScripts.value = UserScriptCodec.decode(it) }
+        }
+        refreshStorageStatus()
+    }
+
+    /** Re-checks whether the configured folder (if any) is still actually accessible - a
+     *  previously-granted folder can go away (SD card removed, user revoked it from system
+     *  settings), and the status line should reflect that rather than keep showing stale info. */
+    fun refreshStorageStatus() {
+        viewModelScope.launch {
+            val configured = axStorage.hasConfiguredFolder()
+            val name = if (configured) axStorage.rootFolderDisplayName() else null
+            _uiState.value = _uiState.value.copy(storageFolderConfigured = configured, storageFolderName = name)
+        }
+    }
+
+    /** Called after the SAF folder picker returns a URI - persists it and takes the persistable
+     *  read/write permission so it survives app restarts and device reboots, not just this
+     *  session. */
+    fun onStorageFolderPicked(uri: android.net.Uri) {
+        viewModelScope.launch {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            }
+            preferences.setAxStorageRootUri(uri.toString())
+            refreshStorageStatus()
+        }
+    }
+
+    /** Opts back out to app-private storage - the folder itself isn't deleted, AxBrowser just
+     *  stops using it and future writes fall back to internal storage like before this feature
+     *  existed. */
+    fun clearStorageFolder() {
+        viewModelScope.launch {
+            preferences.setAxStorageRootUri("")
+            refreshStorageStatus()
         }
     }
 

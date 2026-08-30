@@ -76,7 +76,12 @@ class AxPreferences @Inject constructor(
     val isHttpsUpgrade: Flow<Boolean> = context.dataStore.data.map { it[Keys.IS_HTTPS_UPGRADE] ?: true }
     val isJavascriptEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.IS_JAVASCRIPT_ENABLED] ?: true }
     val maxConcurrentDownloads: Flow<Int> = context.dataStore.data.map { it[Keys.MAX_CONCURRENT_DOWNLOADS] ?: 3 }
-    val downloadFolderUri: Flow<String> = context.dataStore.data.map { it[Keys.DOWNLOAD_FOLDER_URI] ?: "" }
+    /** SAF (Storage Access Framework) tree URI for the user-chosen "AxBrowser" folder - opt-in,
+     *  set once via a folder picker in Settings. Empty means "not set", in which case everything
+     *  falls back to app-private storage (AxStorage.kt handles that fallback). Key name kept as
+     *  "download_folder_uri" (an earlier, narrower, never-wired-up concept) since this preference
+     *  was never actually used yet - reusing it avoids a migration for zero benefit. */
+    val axStorageRootUri: Flow<String> = context.dataStore.data.map { it[Keys.DOWNLOAD_FOLDER_URI] ?: "" }
     val isDesktopMode: Flow<Boolean> = context.dataStore.data.map { it[Keys.IS_DESKTOP_MODE] ?: false }
     val fontSize: Flow<Int> = context.dataStore.data.map { it[Keys.FONT_SIZE] ?: 100 }
     val clearCacheOnExit: Flow<Boolean> = context.dataStore.data.map { it[Keys.CLEAR_CACHE_ON_EXIT] ?: false }
@@ -148,7 +153,7 @@ class AxPreferences @Inject constructor(
     suspend fun setHttpsUpgrade(enabled: Boolean) { context.dataStore.edit { it[Keys.IS_HTTPS_UPGRADE] = enabled } }
     suspend fun setJavascriptEnabled(enabled: Boolean) { context.dataStore.edit { it[Keys.IS_JAVASCRIPT_ENABLED] = enabled } }
     suspend fun setMaxConcurrentDownloads(count: Int) { context.dataStore.edit { it[Keys.MAX_CONCURRENT_DOWNLOADS] = count } }
-    suspend fun setDownloadFolderUri(uri: String) { context.dataStore.edit { it[Keys.DOWNLOAD_FOLDER_URI] = uri } }
+    suspend fun setAxStorageRootUri(uri: String) { context.dataStore.edit { it[Keys.DOWNLOAD_FOLDER_URI] = uri } }
     suspend fun setDesktopMode(enabled: Boolean) { context.dataStore.edit { it[Keys.IS_DESKTOP_MODE] = enabled } }
     suspend fun setFontSize(size: Int) { context.dataStore.edit { it[Keys.FONT_SIZE] = size } }
     suspend fun setClearCacheOnExit(enabled: Boolean) { context.dataStore.edit { it[Keys.CLEAR_CACHE_ON_EXIT] = enabled } }

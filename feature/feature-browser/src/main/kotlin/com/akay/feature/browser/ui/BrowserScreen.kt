@@ -1289,10 +1289,11 @@ fun BrowserScreen(
                 if (all.isEmpty()) return "No requests captured yet - nothing to export."
                 return runCatching {
                     val har = com.akay.feature.browser.devconsole.NetworkInterceptor.toHar()
-                    val dir = java.io.File(context.filesDir, "har_exports").apply { mkdirs() }
-                    val file = java.io.File(dir, "axbrowser_${System.currentTimeMillis()}.har")
-                    file.writeText(har)
-                    "Exported ${all.size} requests to ${file.absolutePath} \u2014 pull it via adb or share it, then open in Chrome DevTools / Postman / Insomnia (File > Import)."
+                    val filename = "axbrowser_${System.currentTimeMillis()}.har"
+                    val result = viewModel.axStorage.writeText(
+                        com.akay.core.data.storage.AxStorageCategory.AGENT, filename, har, "application/json"
+                    )
+                    "Exported ${all.size} requests to ${result.displayPath} \u2014 pull it via adb or share it, then open in Chrome DevTools / Postman / Insomnia (File > Import)."
                 }.getOrElse { "Failed to export HAR: ${it.message}" }
             }
 
@@ -1340,10 +1341,11 @@ fun BrowserScreen(
                         })
                         put("item", items)
                     }
-                    val dir = java.io.File(context.filesDir, "postman_exports").apply { mkdirs() }
-                    val file = java.io.File(dir, "axbrowser_${System.currentTimeMillis()}.postman_collection.json")
-                    file.writeText(collection.toString(2))
-                    "Exported ${all.size} requests to ${file.absolutePath} \u2014 open Postman/Insomnia and File > Import that file."
+                    val filename = "axbrowser_${System.currentTimeMillis()}.postman_collection.json"
+                    val result = viewModel.axStorage.writeText(
+                        com.akay.core.data.storage.AxStorageCategory.AGENT, filename, collection.toString(2), "application/json"
+                    )
+                    "Exported ${all.size} requests to ${result.displayPath} \u2014 open Postman/Insomnia and File > Import that file."
                 }.getOrElse { "Failed to export Postman collection: ${it.message}" }
             }
 
@@ -1445,11 +1447,14 @@ fun BrowserScreen(
                 return runCatching {
                     val bitmap = android.graphics.Bitmap.createBitmap(wv.width, wv.height, android.graphics.Bitmap.Config.ARGB_8888)
                     wv.draw(android.graphics.Canvas(bitmap))
-                    val dir = java.io.File(context.filesDir, "agent_screenshots").apply { mkdirs() }
-                    val file = java.io.File(dir, "shot_${System.currentTimeMillis()}.png")
-                    file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                    val out = java.io.ByteArrayOutputStream()
+                    bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
                     bitmap.recycle()
-                    "Saved screenshot (${wv.width}x${wv.height}) to ${file.absolutePath}"
+                    val filename = "shot_${System.currentTimeMillis()}.png"
+                    val result = viewModel.axStorage.writeFile(
+                        com.akay.core.data.storage.AxStorageCategory.SCREENSHOTS, filename, out.toByteArray(), "image/png"
+                    )
+                    "Saved screenshot (${wv.width}x${wv.height}) to ${result.displayPath}"
                 }.getOrElse { "Failed to capture screenshot: ${it.message}" }
             }
 
@@ -1641,10 +1646,11 @@ fun BrowserScreen(
                             put("components", org.json.JSONObject().apply { put("securitySchemes", securitySchemes) })
                         }
                     }
-                    val dir = java.io.File(context.filesDir, "openapi_exports").apply { mkdirs() }
-                    val file = java.io.File(dir, "axbrowser_${System.currentTimeMillis()}.openapi.json")
-                    file.writeText(doc.toString(2))
-                    "Exported ${grouped.values.sumOf { it.size }} requests across ${paths.length()} paths to ${file.absolutePath} \u2014 " +
+                    val filename = "axbrowser_${System.currentTimeMillis()}.openapi.json"
+                    val result = viewModel.axStorage.writeText(
+                        com.akay.core.data.storage.AxStorageCategory.AGENT, filename, doc.toString(2), "application/json"
+                    )
+                    "Exported ${grouped.values.sumOf { it.size }} requests across ${paths.length()} paths to ${result.displayPath} \u2014 " +
                         "params/schemas are merged across every call observed to each endpoint (not just one example), " +
                         "but this is still inferred from observed traffic, not a real spec from the site \u2014 treat field " +
                         "types and which params are truly required as informed guesses to verify."
@@ -1676,6 +1682,28 @@ fun BrowserScreen(
                     "JS parser or a deobfuscator - it won't undo variable renaming, string encoding, or control-flow flattening, " +
                     "and regex literals containing / or quote characters can occasionally confuse it. Good for a first readable " +
                     "look at minified code, not a substitute for careful manual analysis of genuinely obfuscated code."
+            }
+
+            private fun categoryFor(name: String?): com.akay.core.data.storage.AxStorageCategory =
+                when (name?.lowercase()?.trim()) {
+                    "screenshots", "screenshot" -> com.akay.core.data.storage.AxStorageCategory.SCREENSHOTS
+                    "downloads", "download" -> com.akay.core.data.storage.AxStorageCategory.DOWNLOADS
+                    "other" -> com.akay.core.data.storage.AxStorageCategory.OTHER
+                    else -> com.akay.core.data.storage.AxStorageCategory.AGENT
+                }
+
+            override suspend fun listSavedFiles(category: String?): List<String> =
+                viewModel.axStorage.listFiles(categoryFor(category))
+
+            override suspend fun readSavedFile(category: String?, filename: String): String? =
+                viewModel.axStorage.readText(categoryFor(category), filename)
+
+            override suspend fun writeSavedFile(category: String?, filename: String, content: String): String {
+                val safeName = filename.substringAfterLast('/').substringAfterLast('\\').ifBlank { "file_${System.currentTimeMillis()}.txt" }
+                val result = viewModel.axStorage.writeText(categoryFor(category), safeName, content)
+                return "Saved to ${result.displayPath}" + if (!result.savedToSharedStorage) {
+                    " (app-private storage - set a save location in Settings > Storage to make files like this visible outside the app)"
+                } else ""
             }
         }
     }

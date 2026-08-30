@@ -409,6 +409,41 @@ fun SettingsScreen(
                 }
             }
 
+            SettingsSection(title = "Storage") {
+                val storageLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.OpenDocumentTree()
+                ) { uri -> if (uri != null) viewModel.onStorageFolderPicked(uri) }
+
+                SettingsNavigationItem(
+                    title = "Save location",
+                    subtitle = if (uiState.storageFolderConfigured) {
+                        "Saving to \u201c${uiState.storageFolderName}\u201d \u2022 tap to change"
+                    } else {
+                        "Saving inside app storage \u2022 tap to choose a visible folder instead"
+                    },
+                    onClick = { storageLauncher.launch(null) }
+                )
+                if (uiState.storageFolderConfigured) {
+                    Text(
+                        "Screenshots, exports, and files the agent saves go in subfolders here (Screenshots, Downloads, Agent, Other) - visible in any file manager, and kept if you ever uninstall the app.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                    TextButton(
+                        onClick = { viewModel.clearStorageFolder() },
+                        modifier = Modifier.padding(horizontal = 8.dp)
+                    ) { Text("Stop using this folder", color = MaterialTheme.colorScheme.error) }
+                } else {
+                    Text(
+                        "Entirely optional - everything works fine without this, just saved somewhere only this app can see. Pick a folder (or create a new one, e.g. \"AxBrowser\") to make saved files visible and keep them if you uninstall.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
             SettingsSection(title = "AI Agent") {
                 var showApiKeyDialog by remember { mutableStateOf(false) }
                 var showModelDialog by remember { mutableStateOf(false) }

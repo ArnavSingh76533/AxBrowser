@@ -31,6 +31,7 @@ material = "1.11.0"
 security-crypto = "1.1.0-alpha06"
 biometric = "1.1.0"
 webkit = "1.11.0"
+documentfile = "1.0.1"
 
 [libraries]
 # Core Android
@@ -38,6 +39,7 @@ core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "core-ktx
 appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
 material = { group = "com.google.android.material", name = "material", version.ref = "material" }
 desugar = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugar" }
+documentfile = { group = "androidx.documentfile", name = "documentfile", version.ref = "documentfile" }
 
 # Compose
 compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "compose-bom" }

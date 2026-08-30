@@ -162,6 +162,17 @@ class AgentEngine(
             script or bundle (e.g. one found via find_auth_flow or a captured Worker's source) before deciding
             whether it's worth understanding further. Always pass the tool's own NOTE about this limitation
             through to the user rather than presenting the output as a real deobfuscation.
+        - list_files: {"category": "optional: screenshots | downloads | agent | other, default agent"}
+          - lists filenames already saved in that category (the same storage every save/export tool uses -
+            whether that's a user-visible folder or app-private storage depends on whether the person has set
+            one up in Settings > Storage, but you don't need to know or care which - just use the tool).
+        - read_file: {"category": "optional, default agent", "filename": "exact filename from list_files"}
+          - reads back a previously saved TEXT file (exports, saved scripts/notes - not screenshots, those
+            aren't text). Returns null/not-found if it doesn't exist.
+        - write_file: {"category": "optional, default agent", "filename": "name to save as, e.g. script.py or notes.txt", "content": "the text to save"}
+          - saves text as an actual file the user can find later - use this whenever the user asks you to save/
+            write/create a script, a note, generated code, or any other text output as a file rather than just
+            answering in chat. Overwrites a same-named file rather than duplicating it.
         - get_detected_media: {} - direct video/audio URLs already detected on the page (from network responses and
           <video>/<source>/<audio> tags). Often a better download target than the page URL itself, especially for
           sites that stream from a different domain than the page.
@@ -507,6 +518,22 @@ class AgentEngine(
         }
         "export_openapi" -> tools.exportOpenApi()
         "beautify_js" -> tools.beautifyJs(input.optString("url_or_code"))
+        "list_files" -> {
+            val category = input.optString("category").ifBlank { null }
+            val files = tools.listSavedFiles(category)
+            if (files.isEmpty()) "No files saved under ${category ?: "agent"} yet." else files.joinToString("\n") { "- $it" }
+        }
+        "read_file" -> {
+            val category = input.optString("category").ifBlank { null }
+            val filename = input.optString("filename")
+            tools.readSavedFile(category, filename) ?: "No file named \"$filename\" found under ${category ?: "agent"}."
+        }
+        "write_file" -> {
+            val category = input.optString("category").ifBlank { null }
+            val filename = input.optString("filename")
+            val content = input.optString("content")
+            if (filename.isBlank()) "Need a filename to save this as." else tools.writeSavedFile(category, filename, content)
+        }
         "get_detected_media" -> {
             val results = tools.getDetectedMedia()
             if (results.isEmpty()) "No direct media URLs detected on this page yet."

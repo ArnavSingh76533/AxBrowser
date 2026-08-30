@@ -178,6 +178,24 @@ interface AgentToolExecutor {
      *  that makes even simple scripts unreadable. Genuinely useful for a first look at a worker
      *  script or bundle before deciding whether closer manual analysis is worth it. */
     suspend fun beautifyJs(urlOrCode: String): String
+
+    /** Lists filenames the agent (or user) has saved under [category] ("screenshots", "downloads",
+     *  "agent", or "other" - default "agent" when omitted). This is the same storage every other
+     *  save/export tool writes into (Settings > Storage decides whether that's a user-visible
+     *  folder or app-private storage) - use this to see what's already there before creating a
+     *  new file, or to point the user at something saved earlier. */
+    suspend fun listSavedFiles(category: String?): List<String>
+
+    /** Reads back a text file previously saved under [category] via this tool, write_file, or any
+     *  export tool (export_har, export_postman, export_openapi, save_request, screenshots aren't
+     *  text so won't read as anything useful). Null if no such file exists. */
+    suspend fun readSavedFile(category: String?, filename: String): String?
+
+    /** Saves [content] as a new text file named [filename] under [category] (default "agent") -
+     *  for when the user asks to save a script, a note, generated code, or any other text output
+     *  as an actual file rather than just showing it in chat. Overwrites a file of the same name
+     *  rather than creating a duplicate. Returns where it landed. */
+    suspend fun writeSavedFile(category: String?, filename: String, content: String): String
 }
 
 data class AgentLink(val text: String, val href: String)
