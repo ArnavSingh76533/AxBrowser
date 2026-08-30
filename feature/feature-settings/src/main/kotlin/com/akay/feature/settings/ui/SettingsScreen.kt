@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -69,6 +70,8 @@ import com.akay.core.ui.theme.AccentColors
 import com.akay.core.ui.theme.Primary
 import com.akay.core.ui.theme.accentByName
 import com.akay.feature.settings.cookies.CookieTransfer
+import com.akay.core.data.ai.AI_PROVIDER_PRESETS
+import com.akay.core.data.ai.presetForId
 import com.akay.feature.settings.viewmodel.SEARCH_ENGINES
 import com.akay.feature.settings.viewmodel.SettingsViewModel
 
@@ -408,30 +411,123 @@ fun SettingsScreen(
             SettingsSection(title = "AI Agent") {
                 var showApiKeyDialog by remember { mutableStateOf(false) }
                 var showModelDialog by remember { mutableStateOf(false) }
+                var showProviderDialog by remember { mutableStateOf(false) }
+                var showBaseUrlDialog by remember { mutableStateOf(false) }
                 var apiKeyInput by remember { mutableStateOf("") }
+                var baseUrlInput by remember { mutableStateOf("") }
+                var modelInput by remember { mutableStateOf("") }
+
+                val activePreset = remember(uiState.aiProvider) { presetForId(uiState.aiProvider) }
 
                 SettingsNavigationItem(
-                    title = "OpenRouter API key",
-                    subtitle = if (uiState.aiApiKeySet) "Key saved \u2022 tap to change" else "Add a free OpenRouter API key to enable the AI agent",
+                    title = "AI provider",
+                    subtitle = activePreset.displayName,
+                    onClick = { showProviderDialog = true }
+                )
+                if (uiState.aiProvider == "custom") {
+                    SettingsNavigationItem(
+                        title = "Custom base URL",
+                        subtitle = uiState.aiBaseUrl.ifBlank { "Not set - required before the agent will work" },
+                        onClick = { baseUrlInput = uiState.aiBaseUrl; showBaseUrlDialog = true }
+                    )
+                }
+                SettingsNavigationItem(
+                    title = "${activePreset.displayName} API key",
+                    subtitle = if (uiState.aiApiKeySet) "Key saved \u2022 tap to change" else activePreset.apiKeyHint,
                     onClick = { apiKeyInput = ""; showApiKeyDialog = true }
                 )
                 SettingsNavigationItem(
                     title = "AI model",
                     subtitle = uiState.aiModel,
                     onClick = {
+                        modelInput = uiState.aiModel
                         showModelDialog = true
                         if (uiState.aiFreeModels.isEmpty()) viewModel.refreshFreeModels()
                     }
                 )
 
-                if (showApiKeyDialog) {
+                if (showProviderDialog) {
                     AlertDialog(
-                        onDismissRequest = { showApiKeyDialog = false },
-                        title = { Text("OpenRouter API key") },
+                        onDismissRequest = { showProviderDialog = false },
+                        title = { Text("AI provider") },
+                        text = {
+                            Column {
+                                AI_PROVIDER_PRESETS.forEach { preset ->
+                                    TextButton(
+                                        onClick = {
+                                            viewModel.setAiProvider(preset.id)
+                                            showProviderDialog = false
+                                        },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Column(modifier = Modifier.fillMaxWidth()) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween
+                                            ) {
+                                                Text(preset.displayName, style = MaterialTheme.typography.bodyMedium)
+                                                if (preset.id == uiState.aiProvider) {
+                                                    Icon(Icons.Default.Check, contentDescription = "Selected")
+                                                }
+                                            }
+                                            if (preset.baseUrl.isNotBlank()) {
+                                                Text(
+                                                    preset.baseUrl,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        confirmButton = { TextButton(onClick = { showProviderDialog = false }) { Text("Close") } }
+                    )
+                }
+
+                if (showBaseUrlDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showBaseUrlDialog = false },
+                        title = { Text("Custom base URL") },
                         text = {
                             Column {
                                 Text(
-                                    "Get a free key at openrouter.ai \u2192 Keys. AxBrowser only uses OpenRouter's free-tier models.",
+                                    "Any server speaking the OpenAI-compatible /chat/completions API - self-hosted, Groq, Together, etc. " +
+                                        "No trailing slash, no /chat/completions suffix, e.g. https://api.example.com/v1",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                OutlinedTextField(
+                                    value = baseUrlInput,
+                                    onValueChange = { baseUrlInput = it },
+                                    label = { Text("https://...") },
+                                    singleLine = true
+                                )
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(
+                                enabled = baseUrlInput.isNotBlank(),
+                                onClick = {
+                                    viewModel.setAiBaseUrl(baseUrlInput.trim().trimEnd('/'))
+                                    showBaseUrlDialog = false
+                                }
+                            ) { Text("Save") }
+                        },
+                        dismissButton = { TextButton(onClick = { showBaseUrlDialog = false }) { Text("Cancel") } }
+                    )
+                }
+
+                if (showApiKeyDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showApiKeyDialog = false },
+                        title = { Text("${activePreset.displayName} API key") },
+                        text = {
+                            Column {
+                                Text(
+                                    activePreset.apiKeyHint,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -439,7 +535,7 @@ fun SettingsScreen(
                                 OutlinedTextField(
                                     value = apiKeyInput,
                                     onValueChange = { apiKeyInput = it },
-                                    label = { Text("sk-or-v1-...") },
+                                    label = { Text("API key") },
                                     singleLine = true,
                                     visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation()
                                 )
@@ -471,9 +567,30 @@ fun SettingsScreen(
                 if (showModelDialog) {
                     AlertDialog(
                         onDismissRequest = { showModelDialog = false },
-                        title = { Text("Choose a free model") },
+                        title = { Text("Choose a model") },
                         text = {
                             Column {
+                                OutlinedTextField(
+                                    value = modelInput,
+                                    onValueChange = { modelInput = it },
+                                    label = { Text("Model name") },
+                                    singleLine = true,
+                                    trailingIcon = {
+                                        TextButton(onClick = {
+                                            if (modelInput.isNotBlank()) {
+                                                viewModel.setAiModel(modelInput.trim())
+                                                showModelDialog = false
+                                            }
+                                        }) { Text("Use") }
+                                    }
+                                )
+                                Spacer(Modifier.height(6.dp))
+                                Text(
+                                    "Type an exact model ID above, or fetch and pick one below:",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(Modifier.height(6.dp))
                                 when {
                                     uiState.aiModelsLoading -> {
                                         Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
@@ -482,10 +599,13 @@ fun SettingsScreen(
                                     }
                                     uiState.aiModelsError != null -> {
                                         Text(uiState.aiModelsError ?: "", color = MaterialTheme.colorScheme.error)
-                                        TextButton(onClick = { viewModel.refreshFreeModels() }) { Text("Retry") }
+                                        TextButton(onClick = { viewModel.refreshFreeModels() }) { Text("Retry fetching models") }
+                                    }
+                                    uiState.aiFreeModels.isEmpty() -> {
+                                        TextButton(onClick = { viewModel.refreshFreeModels() }) { Text("Fetch available models") }
                                     }
                                     else -> {
-                                        LazyColumn(modifier = Modifier.heightIn(max = 400.dp)) {
+                                        LazyColumn(modifier = Modifier.heightIn(max = 350.dp)) {
                                             items(uiState.aiFreeModels) { model ->
                                                 TextButton(
                                                     onClick = {

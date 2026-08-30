@@ -52,6 +52,8 @@ class AxPreferences @Inject constructor(
         val THEME_PRESET = stringPreferencesKey("theme_preset")
         val OPENROUTER_API_KEY_ENC = stringPreferencesKey("openrouter_api_key_enc")
         val AI_MODEL = stringPreferencesKey("ai_model")
+        val AI_PROVIDER = stringPreferencesKey("ai_provider")
+        val AI_BASE_URL = stringPreferencesKey("ai_base_url")
         val PROXY_ENABLED = booleanPreferencesKey("proxy_enabled")
         val PROXY_ROTATION_MODE = stringPreferencesKey("proxy_rotation_mode")
         val PROXY_ROTATION_INTERVAL_MIN = intPreferencesKey("proxy_rotation_interval_min")
@@ -92,10 +94,19 @@ class AxPreferences @Inject constructor(
     val wifiOnlyDownloads: Flow<Boolean> = context.dataStore.data.map { it[Keys.WIFI_ONLY_DOWNLOADS] ?: false }
     val batterySaverEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.BATTERY_SAVER_ENABLED] ?: false }
     val themePreset: Flow<String> = context.dataStore.data.map { it[Keys.THEME_PRESET] ?: "Nebula" }
+    /** The encrypted key stored under this name is reused for whichever provider is currently
+     *  selected (OpenRouter, OpenAI, NVIDIA NIM, or a custom OpenAI-compatible endpoint) - one
+     *  key slot, since a person only has one active provider configured at a time. */
     val openRouterApiKey: Flow<String?> = context.dataStore.data.map { prefs ->
         prefs[Keys.OPENROUTER_API_KEY_ENC]?.let { enc -> runCatching { cryptoManager.decrypt(enc) }.getOrNull() }
     }
     val aiModel: Flow<String> = context.dataStore.data.map { it[Keys.AI_MODEL] ?: "meta-llama/llama-3.1-8b-instruct:free" }
+    /** Which provider preset is active: "openrouter" | "openai" | "nim" | "custom". */
+    val aiProvider: Flow<String> = context.dataStore.data.map { it[Keys.AI_PROVIDER] ?: "openrouter" }
+    /** The OpenAI-compatible base URL (no trailing slash, no /chat/completions suffix) for the
+     *  active provider - e.g. https://openrouter.ai/api/v1. Only meaningfully editable when
+     *  aiProvider == "custom"; for the built-in presets this mirrors AiProviderPresets. */
+    val aiBaseUrl: Flow<String> = context.dataStore.data.map { it[Keys.AI_BASE_URL] ?: "https://openrouter.ai/api/v1" }
 
     val proxyEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.PROXY_ENABLED] ?: false }
     val proxyRotationMode: Flow<String> = context.dataStore.data.map { it[Keys.PROXY_ROTATION_MODE] ?: "MANUAL" }
@@ -166,6 +177,8 @@ class AxPreferences @Inject constructor(
         }
     }
     suspend fun setAiModel(modelId: String) { context.dataStore.edit { it[Keys.AI_MODEL] = modelId } }
+    suspend fun setAiProvider(providerId: String) { context.dataStore.edit { it[Keys.AI_PROVIDER] = providerId } }
+    suspend fun setAiBaseUrl(url: String) { context.dataStore.edit { it[Keys.AI_BASE_URL] = url } }
 
     suspend fun setProxyEnabled(enabled: Boolean) { context.dataStore.edit { it[Keys.PROXY_ENABLED] = enabled } }
     suspend fun setProxyRotationMode(mode: String) { context.dataStore.edit { it[Keys.PROXY_ROTATION_MODE] = mode } }

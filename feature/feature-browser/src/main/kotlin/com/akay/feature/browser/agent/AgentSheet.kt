@@ -42,6 +42,7 @@ fun AgentSheet(
     controller: AgentChatController,
     apiKey: String?,
     model: String,
+    baseUrl: String = "https://openrouter.ai/api/v1",
     onMinimize: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
@@ -66,7 +67,7 @@ fun AgentSheet(
     fun send() {
         val goal = input
         input = ""
-        controller.send(goal, apiKey.orEmpty(), model) {
+        controller.send(goal, apiKey.orEmpty(), model, baseUrl) {
             scope.launch {
                 if (controller.turns.isNotEmpty()) listState.animateScrollToItem(controller.turns.size - 1)
             }

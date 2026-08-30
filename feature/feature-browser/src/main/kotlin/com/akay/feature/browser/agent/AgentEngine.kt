@@ -23,7 +23,8 @@ class AgentEngine(
     private val client: OpenRouterClient,
     private val apiKey: String,
     private val model: String,
-    private val tools: AgentToolExecutor
+    private val tools: AgentToolExecutor,
+    private val baseUrl: String = "https://openrouter.ai/api/v1"
 ) {
     private val systemPrompt = """
         You are AxBrowser's in-app AI agent. You control a real mobile web browser for the user,
@@ -235,7 +236,7 @@ class AgentEngine(
                     "You have 2 steps left. If you already have enough information to answer, call final_answer now with your best current findings instead of continuing to explore."
                 )
             }
-            val result = client.chat(apiKey, model, history)
+            val result = client.chat(apiKey, model, history, baseUrl = baseUrl)
             val chatResult = result.getOrElse {
                 // Surface the actual failure (HTTP status/body from OpenRouterClient, or the raw
                 // exception) instead of a generic "request failed" - this was the #1 confusing
@@ -261,7 +262,7 @@ class AgentEngine(
                     "user",
                     "Your last reply wasn't a single valid JSON object as instructed. Reply again with ONLY the JSON object described in the system prompt - no prose, no markdown fences."
                 )
-                val retryResult = client.chat(apiKey, model, history)
+                val retryResult = client.chat(apiKey, model, history, baseUrl = baseUrl)
                 val retryChatResult = retryResult.getOrElse {
                     val detail = it.message?.takeIf { m -> m.isNotBlank() } ?: it.toString()
                     onEvent(AgentEvent.Error("Model request failed on retry: $detail"))

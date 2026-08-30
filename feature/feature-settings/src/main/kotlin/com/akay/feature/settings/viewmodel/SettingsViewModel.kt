@@ -5,8 +5,10 @@ import android.webkit.CookieManager
 import android.webkit.WebStorage
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.akay.core.data.ai.AI_PROVIDER_PRESETS
 import com.akay.core.data.ai.OpenRouterClient
 import com.akay.core.data.ai.OpenRouterModel
+import com.akay.core.data.ai.presetForId
 import com.akay.core.data.datastore.AxPreferences
 import com.akay.core.data.userscript.UserScript
 import com.akay.core.data.userscript.UserScriptCodec
@@ -67,7 +69,9 @@ data class SettingsUiState(
     val aiModel: String = "meta-llama/llama-3.1-8b-instruct:free",
     val aiFreeModels: List<OpenRouterModel> = emptyList(),
     val aiModelsLoading: Boolean = false,
-    val aiModelsError: String? = null
+    val aiModelsError: String? = null,
+    val aiProvider: String = "openrouter",
+    val aiBaseUrl: String = "https://openrouter.ai/api/v1"
 ) {
     val searchEngineName: String
         get() = SEARCH_ENGINES.firstOrNull { it.url == searchEngineUrl }?.name ?: "Custom"
@@ -214,6 +218,12 @@ class SettingsViewModel @Inject constructor(
             preferences.aiModel.collect { _uiState.value = _uiState.value.copy(aiModel = it) }
         }
         viewModelScope.launch {
+            preferences.aiProvider.collect { _uiState.value = _uiState.value.copy(aiProvider = it) }
+        }
+        viewModelScope.launch {
+            preferences.aiBaseUrl.collect { _uiState.value = _uiState.value.copy(aiBaseUrl = it) }
+        }
+        viewModelScope.launch {
             preferences.animationIntensity.collect { _uiState.value = _uiState.value.copy(animationIntensity = it) }
         }
         viewModelScope.launch {
@@ -269,11 +279,39 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { preferences.setAiModel(modelId) }
     }
 
+    /** Switching provider re-points baseUrl at that preset's URL (except "custom", which keeps
+     *  whatever the person already typed) and clears the stale model list from whichever
+     *  provider was selected before, since a model ID from one provider is meaningless on
+     *  another. */
+    fun setAiProvider(providerId: String) {
+        viewModelScope.launch {
+            preferences.setAiProvider(providerId)
+            val preset = presetForId(providerId)
+            if (providerId != "custom") preferences.setAiBaseUrl(preset.baseUrl)
+            _uiState.value = _uiState.value.copy(aiFreeModels = emptyList(), aiModelsError = null)
+        }
+    }
+
+    fun setAiBaseUrl(url: String) {
+        viewModelScope.launch { preferences.setAiBaseUrl(url) }
+    }
+
     fun refreshFreeModels() {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(aiModelsLoading = true, aiModelsError = null)
             val key = preferences.openRouterApiKey.first()
-            val result = openRouterClient.fetchFreeModels(key)
+            val provider = preferences.aiProvider.first()
+            val preset = presetForId(provider)
+            val baseUrl = if (provider == "custom") preferences.aiBaseUrl.first() else preset.baseUrl
+            if (provider == "custom" && baseUrl.isBlank()) {
+                _uiState.value = _uiState.value.copy(aiModelsLoading = false, aiModelsError = "Set a base URL first.")
+                return@launch
+            }
+            val result = if (preset.filterToFree) {
+                openRouterClient.fetchFreeModels(key)
+            } else {
+                openRouterClient.fetchModels(key, baseUrl)
+            }
             _uiState.value = result.fold(
                 onSuccess = { models -> _uiState.value.copy(aiModelsLoading = false, aiFreeModels = models) },
                 onFailure = { e -> _uiState.value.copy(aiModelsLoading = false, aiModelsError = e.message ?: "Failed to load models") }

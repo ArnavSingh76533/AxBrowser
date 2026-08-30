@@ -258,6 +258,8 @@ class BrowserViewModel @Inject constructor(
         .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, null)
     val aiModel: StateFlow<String> = preferences.aiModel
         .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, "meta-llama/llama-3.1-8b-instruct:free")
+    val aiBaseUrl: StateFlow<String> = preferences.aiBaseUrl
+        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, "https://openrouter.ai/api/v1")
 
     val activeProxy: StateFlow<com.akay.core.domain.model.ProxyServer?> = proxyManager.activeProxy
 

@@ -1688,11 +1688,13 @@ fun BrowserScreen(
     if (agentSheetVisible) {
         val aiApiKey by viewModel.aiApiKey.collectAsState()
         val aiModel by viewModel.aiModel.collectAsState()
+        val aiBaseUrl by viewModel.aiBaseUrl.collectAsState()
 
         com.akay.feature.browser.agent.AgentSheet(
             controller = agentController,
             apiKey = aiApiKey,
             model = aiModel,
+            baseUrl = aiBaseUrl,
             onMinimize = { agentSheetVisible = false },
             onOpenSettings = {
                 agentSheetVisible = false

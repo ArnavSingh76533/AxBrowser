@@ -46,7 +46,7 @@ class AgentChatController(
 
     private var engine: AgentEngine? = null
 
-    fun send(goal: String, apiKey: String, model: String, onUpdated: () -> Unit = {}) {
+    fun send(goal: String, apiKey: String, model: String, baseUrl: String = "https://openrouter.ai/api/v1", onUpdated: () -> Unit = {}) {
         val trimmed = goal.trim()
         if (trimmed.isBlank() || isRunning || apiKey.isBlank()) return
         hasSession = true
@@ -55,7 +55,7 @@ class AgentChatController(
         isRunning = true
         onUpdated()
         scope.launch {
-            val activeEngine = engine ?: AgentEngine(openRouterClient, apiKey, model, tools).also { engine = it }
+            val activeEngine = engine ?: AgentEngine(openRouterClient, apiKey, model, tools, baseUrl).also { engine = it }
             activeEngine.run(trimmed) { event ->
                 when (event) {
                     is AgentEvent.Thinking -> turn.steps.add(AgentStep(StepKind.THOUGHT, event.thought))
