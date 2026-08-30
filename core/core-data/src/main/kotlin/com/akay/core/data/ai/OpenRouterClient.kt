@@ -10,6 +10,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /** Suspends until the call completes, but - unlike plain .execute() - actually responds to
  *  coroutine cancellation by cancelling the underlying OkHttp call (which closes the socket),
@@ -18,7 +20,7 @@ import javax.inject.Singleton
 private suspend fun okhttp3.Call.await(): okhttp3.Response = kotlinx.coroutines.suspendCancellableCoroutine { cont ->
     enqueue(object : okhttp3.Callback {
         override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
-            if (cont.isActive) cont.resume(response) { _, _, _ -> response.close() } else response.close()
+            if (cont.isActive) cont.resume(response) else response.close()
         }
         override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
             if (!call.isCanceled() && cont.isActive) cont.resumeWithException(e)
