@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.SubdirectoryArrowRight
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -133,8 +134,14 @@ fun AgentSheet(
                         keyboardActions = KeyboardActions(onSend = { send() })
                     )
                     Spacer(Modifier.width(8.dp))
-                    IconButton(onClick = { send() }, enabled = !controller.isRunning && input.isNotBlank()) {
-                        Icon(Icons.Default.Send, "Send", tint = Primary)
+                    if (controller.isRunning) {
+                        IconButton(onClick = { controller.stop() }) {
+                            Icon(Icons.Default.Stop, "Stop", tint = MaterialTheme.colorScheme.error)
+                        }
+                    } else {
+                        IconButton(onClick = { send() }, enabled = input.isNotBlank()) {
+                            Icon(Icons.Default.Send, "Send", tint = Primary)
+                        }
                     }
                 }
             }

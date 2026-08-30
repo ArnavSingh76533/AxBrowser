@@ -45,6 +45,7 @@ class AgentChatController(
         private set
 
     private var engine: AgentEngine? = null
+    private var activeJob: kotlinx.coroutines.Job? = null
 
     fun send(goal: String, apiKey: String, model: String, baseUrl: String = "https://openrouter.ai/api/v1", onUpdated: () -> Unit = {}) {
         val trimmed = goal.trim()
@@ -54,34 +55,51 @@ class AgentChatController(
         turns.add(turn)
         isRunning = true
         onUpdated()
-        scope.launch {
-            val activeEngine = engine ?: AgentEngine(openRouterClient, apiKey, model, tools, baseUrl).also { engine = it }
-            activeEngine.run(trimmed) { event ->
-                when (event) {
-                    is AgentEvent.Thinking -> turn.steps.add(AgentStep(StepKind.THOUGHT, event.thought))
-                    is AgentEvent.ToolCall -> turn.steps.add(AgentStep(StepKind.TOOL_CALL, "${event.action}(${event.input})"))
-                    is AgentEvent.ToolResult -> turn.steps.add(AgentStep(StepKind.TOOL_RESULT, event.observation.take(400)))
-                    is AgentEvent.FinalAnswer -> turn.finalText = event.text
-                    is AgentEvent.Error -> {
-                        turn.finalText = event.message
-                        turn.isError = true
+        activeJob = scope.launch {
+            try {
+                val activeEngine = engine ?: AgentEngine(openRouterClient, apiKey, model, tools, baseUrl).also { engine = it }
+                activeEngine.run(trimmed) { event ->
+                    when (event) {
+                        is AgentEvent.Thinking -> turn.steps.add(AgentStep(StepKind.THOUGHT, event.thought))
+                        is AgentEvent.ToolCall -> turn.steps.add(AgentStep(StepKind.TOOL_CALL, "${event.action}(${event.input})"))
+                        is AgentEvent.ToolResult -> turn.steps.add(AgentStep(StepKind.TOOL_RESULT, event.observation.take(400)))
+                        is AgentEvent.FinalAnswer -> turn.finalText = event.text
+                        is AgentEvent.Error -> {
+                            turn.finalText = event.message
+                            turn.isError = true
+                        }
                     }
+                    onUpdated()
                 }
+                if (turn.finalText == null) {
+                    turn.finalText = "Stopped without a final answer."
+                    turn.isError = true
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // User tapped Stop - not an error, just an intentional interruption. The network
+                // call itself (if one was in flight) is also actually aborted here, not just
+                // hidden - see OpenRouterClient.await()'s invokeOnCancellation.
+                turn.finalText = "Stopped."
+                turn.isError = false
+                throw e
+            } finally {
+                turn.isRunning = false
+                isRunning = false
                 onUpdated()
             }
-            if (turn.finalText == null) {
-                turn.finalText = "Stopped without a final answer."
-                turn.isError = true
-            }
-            turn.isRunning = false
-            isRunning = false
-            onUpdated()
         }
+    }
+
+    /** Aborts the in-flight agent run, including any network call currently in progress - not
+     *  just marking it done while the request keeps running in the background until it times out. */
+    fun stop() {
+        activeJob?.cancel()
     }
 
     fun newChat() {
         turns.clear()
         engine = null
+        activeJob = null
         hasSession = false
     }
 }

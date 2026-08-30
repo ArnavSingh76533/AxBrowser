@@ -28,6 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -565,6 +566,13 @@ fun SettingsScreen(
                 }
 
                 if (showModelDialog) {
+                    var modelSearch by remember(showModelDialog) { mutableStateOf("") }
+                    val filteredModels = remember(uiState.aiFreeModels, modelSearch) {
+                        if (modelSearch.isBlank()) uiState.aiFreeModels
+                        else uiState.aiFreeModels.filter {
+                            it.name.contains(modelSearch, ignoreCase = true) || it.id.contains(modelSearch, ignoreCase = true)
+                        }
+                    }
                     AlertDialog(
                         onDismissRequest = { showModelDialog = false },
                         title = { Text("Choose a model") },
@@ -591,6 +599,19 @@ fun SettingsScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                                 Spacer(Modifier.height(6.dp))
+                                if (uiState.aiFreeModels.isNotEmpty()) {
+                                    OutlinedTextField(
+                                        value = modelSearch,
+                                        onValueChange = { modelSearch = it },
+                                        label = { Text("Filter ${uiState.aiFreeModels.size} models\u2026") },
+                                        singleLine = true,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        trailingIcon = if (modelSearch.isNotBlank()) {
+                                            { IconButton(onClick = { modelSearch = "" }) { Icon(Icons.Default.Close, "Clear filter") } }
+                                        } else null
+                                    )
+                                    Spacer(Modifier.height(6.dp))
+                                }
                                 when {
                                     uiState.aiModelsLoading -> {
                                         Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
@@ -604,9 +625,17 @@ fun SettingsScreen(
                                     uiState.aiFreeModels.isEmpty() -> {
                                         TextButton(onClick = { viewModel.refreshFreeModels() }) { Text("Fetch available models") }
                                     }
+                                    filteredModels.isEmpty() -> {
+                                        Text(
+                                            "No models match \"$modelSearch\".",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(vertical = 12.dp)
+                                        )
+                                    }
                                     else -> {
                                         LazyColumn(modifier = Modifier.heightIn(max = 350.dp)) {
-                                            items(uiState.aiFreeModels) { model ->
+                                            items(filteredModels, key = { it.id }) { model ->
                                                 TextButton(
                                                     onClick = {
                                                         viewModel.setAiModel(model.id)

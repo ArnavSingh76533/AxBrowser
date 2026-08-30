@@ -11,6 +11,22 @@ import org.json.JSONObject
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/** Suspends until the call completes, but - unlike plain .execute() - actually responds to
+ *  coroutine cancellation by cancelling the underlying OkHttp call (which closes the socket),
+ *  instead of leaving a blocking call running until it naturally times out. This is what makes
+ *  the agent chat's Stop button actually abort a hung request instead of just hiding it. */
+private suspend fun okhttp3.Call.await(): okhttp3.Response = kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+    enqueue(object : okhttp3.Callback {
+        override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+            if (cont.isActive) cont.resume(response) { _, _, _ -> response.close() } else response.close()
+        }
+        override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
+            if (!call.isCanceled() && cont.isActive) cont.resumeWithException(e)
+        }
+    })
+    cont.invokeOnCancellation { runCatching { cancel() } }
+}
+
 data class OpenRouterModel(
     val id: String,
     val name: String,
@@ -36,9 +52,22 @@ data class ChatCompletionResult(
  */
 @Singleton
 class OpenRouterClient @Inject constructor(
-    private val okHttpClient: OkHttpClient
+    sharedOkHttpClient: OkHttpClient
 ) {
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
+
+    // The app-wide shared client uses a snappy 30s timeout everywhere, which is right for page
+    // loads/downloads (fail fast on a dead server) but wrong here: a custom/self-hosted OpenAI-
+    // compatible endpoint can legitimately take much longer to even establish a connection
+    // (slower infra, waking from cold start) and a model's actual generation - especially longer
+    // agent runs or reasoning models - can run well past 30s of read time. Deriving a
+    // longer-timeout client here (rather than raising the global 30s everywhere) keeps ordinary
+    // browsing snappy while giving slow model backends the room they actually need.
+    private val okHttpClient: OkHttpClient = sharedOkHttpClient.newBuilder()
+        .connectTimeout(45, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(180, java.util.concurrent.TimeUnit.SECONDS)
+        .writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
 
     suspend fun chat(
         apiKey: String,
@@ -70,7 +99,7 @@ class OpenRouterClient @Inject constructor(
                     .post(body)
                     .build()
 
-                okHttpClient.newCall(request).execute().use { response ->
+                okHttpClient.newCall(request).await().use { response ->
                     val raw = response.body?.string().orEmpty()
                     if (!response.isSuccessful) {
                         // Always surface something concrete: the API's own error message when it
@@ -114,7 +143,9 @@ class OpenRouterClient @Inject constructor(
                 if (throwable.message?.startsWith("Model API") == true || throwable.message?.startsWith("Model returned") == true) {
                     throw throwable
                 }
-                throw IllegalStateException("Network error contacting the model API (${throwable::class.simpleName}): ${throwable.message ?: "no details"}", throwable)
+                val isTimeout = throwable is java.net.SocketTimeoutException
+                val hint = if (isTimeout) " - the model API at this base URL didn't respond in time. If this is a custom/self-hosted endpoint, check it's actually reachable and not just slow to cold-start." else ""
+                throw IllegalStateException("Network error contacting the model API (${throwable::class.simpleName}): ${throwable.message ?: "no details"}$hint", throwable)
             }
         }
 
