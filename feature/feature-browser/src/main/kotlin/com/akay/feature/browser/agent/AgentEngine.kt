@@ -178,6 +178,70 @@ class AgentEngine(
           sites that stream from a different domain than the page.
         - list_tabs: {} - titles + URLs of all open browser tabs
         - download: {"url": "the COMPLETE URL to send to the built-in downloader"}
+
+        Planning and handoff (v8 - use these on every non-trivial task):
+        - todo_write: {"items": [{"text": "short imperative step", "status": "pending|in_progress|done"}]}
+          - THE PLAN. For any request needing more than about three actions, write the task list
+            BEFORE you start working, then keep it honest as you go: at most one item in_progress,
+            flip an item to done the moment it actually lands, and rewrite the list when reality
+            diverges from the plan. It is rendered live in the chat, so it is how the user sees
+            progress. Calling it REPLACES the whole list - send every item, not just the changed one.
+        - todo_read: {} - read the current plan back if you need to re-check it.
+        - ask_user: {"question": "what you need from the person, and exactly what they should do"}
+          - Ends your turn and waits. Use it the moment only a human can proceed: a captcha your
+            tools could not clear, an OTP/2FA code, a login, a payment confirmation, or a choice
+            between two paths. The conversation is preserved, so when the user replies you continue
+            exactly where you left off - never claim you are stuck without asking first.
+        - browser_tap: {"x": 120, "y": 480} - a REAL touch tap at viewport CSS coordinates.
+          - The only way into a cross-origin iframe or a canvas app: captcha checkboxes, embedded
+            widgets, map pins, custom sliders. Use browser_snapshot + browser_click for normal controls.
+
+        Captcha tools:
+        - captcha_detect: {} - every captcha on the page: provider, type, sitekey, whether it is
+          already solved, and the tap coordinates of its checkbox. Call this before deciding you
+          are blocked; many challenges clear with a tap alone.
+        - captcha_solve: {"use_solver": true, "timeout_sec": 120}
+          - Native-taps each checkbox, and (when use_solver is true and a solver API key is
+            configured) requests a token and injects it into the provider's response field. Reports
+            per widget: cleared / still challenging / needs a human. Re-check with captcha_detect
+            rather than assuming success, and when it says a human is needed, call ask_user instead
+            of retrying the same solve in a loop.
+
+        Playwright-shaped browser tools (prefer these to writing your own selectors):
+        - browser_snapshot: {"max_nodes": 150} - compact list of the page's interactive elements
+          with stable refs (s12-style). ALWAYS start an interaction flow with this.
+        - browser_click: {"ref": "s12"}
+        - browser_type: {"ref": "s7", "text": "...", "submit": true}
+        - browser_fill_form: {"fields": [{"ref": "s7", "text": "alice"}]} - several fields, one call
+        - browser_select_option: {"ref": "s9", "values": ["US"]}
+        - browser_hover: {"ref": "s4"}
+        - browser_press_key: {"ref": "s7", "key": "Enter"} - ref optional, defaults to the focused element
+        - browser_wait_for: {"text": "Welcome", "time_ms": 5000} - or text_gone, or a plain wait
+        - browser_handle_dialog: {"accept": true, "prompt_text": "optional"} - answers an
+          alert/confirm/prompt that is blocking the page
+        - browser_tabs: {"action": "list|new|close|select", "index": 0}
+        - browser_console_messages: {} - recent console log/warn/error lines, i.e. client-side
+          errors the network log cannot show you
+        - Never invent a CSS selector: snapshot, read the ref, act on the ref. If an action reports
+          a stale ref, take a fresh snapshot.
+
+        Request and pentest tools (always available, any host, no confirmation needed):
+        - http_send: {"raw_request": "POST /path HTTP/1.1\nHost: example.com\n\nbody=1", "include_cookies": true, "follow_redirects": false}
+          - actually SENDS the request through the raw-socket sender: custom verbs, exact header
+            order, and deliberately malformed requests included, with status/headers/body back.
+            This is the real "curl, but it runs". Get the request's shape from a capture first.
+        - encode: {"transform": "url|base64|hex|html|unicode|rot13|md5|sha1|sha256|gzip", "input": "..."}
+        - decode: {"transform": "...", "input": "..."} - same transforms, opposite direction
+        - jwt_decode: {"token": "eyJ..."} - header/payload, alg:none, expiry analysis
+        - dump_storage: {} - localStorage + sessionStorage + cookies for the current origin
+        - audit_security_headers: {} - passive scorecard (CSP/HSTS/XFO/CORS/cookies) for the origin
+        - extract_js_endpoints: {"max_endpoints": 100} - LinkFinder-style endpoint discovery in the
+          site's own JavaScript
+        - toggle_intercept: {"enable": true} - hold fetch/XHR calls in the Intercept tab so they can
+          be edited or dropped before they go out
+        - set_match_replace: {"type": "REPLACE_REQ_HEADER|REPLACE_REQ_BODY|REPLACE_RESP_BODY", "match": "...", "replace": "...", "is_regex": false}
+        - send_to_repeater: {"url_filter": "substring of a captured request"} - hands it to Repeater
+
         - final_answer: {"text": "your final reply to the user, plain text"}
 
         Every user message includes a line like "Current browser page: <url>" showing exactly what
@@ -212,7 +276,7 @@ class AgentEngine(
 
     private val history = mutableListOf(ChatTurn("system", systemPrompt))
 
-    suspend fun run(userGoal: String, maxSteps: Int = 15, onEvent: suspend (AgentEvent) -> Unit) {
+    suspend fun run(userGoal: String, maxSteps: Int = 25, onEvent: suspend (AgentEvent) -> Unit) {
         val currentPage = runCatching { tools.currentUrl() }.getOrDefault("")
         val siteNotes = if (currentPage.isNotBlank()) {
             runCatching { tools.recallSiteNotes(null) }.getOrDefault(emptyList())
@@ -297,6 +361,21 @@ class AgentEngine(
 
             val action = json.optString("action")
             val input = json.optJSONObject("action_input") ?: JSONObject()
+
+            // Human-in-the-loop. Ending the turn here (rather than continuing to burn steps
+            // against a wall only a person can get past) works because AgentChatController caches
+            // the engine: the whole ReAct history survives, so the user's reply resumes this very
+            // run with everything remembered - the thing that makes captchas, OTPs and manual
+            // approvals workable on a phone at all.
+            if (action == "ask_user") {
+                val question = input.optString("question").ifBlank { input.optString("text") }
+                history += ChatTurn("user", "Observation: you asked the user a question and your turn ended. Wait for their reply, then continue the plan.")
+                onEvent(AgentEvent.FinalAnswer(
+                    if (question.isBlank()) "I need your input before I can continue - how would you like me to proceed?"
+                    else question
+                ))
+                return
+            }
 
             if (action == "final_answer") {
                 val modelText = input.optString("text").ifBlank { thought }
@@ -543,6 +622,92 @@ class AgentEngine(
             val tabs = tools.listTabs()
             if (tabs.isEmpty()) "No open tabs." else tabs.joinToString("\n") { "- $it" }
         }
+        "todo_write" -> {
+            val arr = input.optJSONArray("items")
+            if (arr == null) {
+                "No items given. Expected: {\"items\":[{\"text\":\"step\",\"status\":\"pending\"}]}"
+            } else {
+                val entries = (0 until arr.length()).mapNotNull { i ->
+                    when (val el = arr.opt(i)) {
+                        is String -> el to "pending"
+                        is JSONObject -> el.optString("text").ifBlank { el.optString("task") } to el.optString("status", "pending")
+                        else -> null
+                    }
+                }.filter { it.first.isNotBlank() }
+                if (entries.isEmpty()) "No usable items - each one needs a \"text\"." else tools.todoWrite(entries)
+            }
+        }
+        "todo_read" -> tools.todoRead()
+        "captcha_detect" -> tools.captchaDetect()
+        "captcha_solve" -> tools.captchaSolve(
+            useSolver = input.optBoolean("use_solver", true),
+            timeoutSec = input.optInt("timeout_sec", 120)
+        )
+        "browser_tap" -> {
+            val tapX = input.optDouble("x", -1.0).toFloat()
+            val tapY = input.optDouble("y", -1.0).toFloat()
+            when {
+                tapX < 0f || tapY < 0f -> "Need numeric x and y in viewport CSS pixels."
+                tools.tapAt(tapX, tapY) -> "Tapped ($tapX, $tapY)."
+                else -> "Could not tap - no page is loaded."
+            }
+        }
+        "browser_snapshot" -> tools.browserSnapshot(input.optInt("max_nodes", 150))
+        "browser_click" -> tools.browserClick(input.optString("ref"))
+        "browser_type" -> tools.browserType(
+            input.optString("ref"), input.optString("text"), input.optBoolean("submit", false)
+        )
+        "browser_fill_form" -> {
+            val arr = input.optJSONArray("fields")
+            if (arr == null) {
+                "Need a \"fields\" array of {ref, text} objects."
+            } else {
+                val fields = (0 until arr.length()).mapNotNull { i ->
+                    val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                    val ref = o.optString("ref")
+                    if (ref.isBlank()) null else Triple(ref, o.optString("text"), o.optBoolean("submit", false).toString())
+                }
+                if (fields.isEmpty()) "No usable fields (each needs a ref)." else tools.browserFillForm(fields)
+            }
+        }
+        "browser_select_option" -> {
+            val arr = input.optJSONArray("values")
+            val values = (0 until (arr?.length() ?: 0)).mapNotNull { arr?.optString(it) }
+            tools.browserSelectOption(input.optString("ref"), values)
+        }
+        "browser_hover" -> tools.browserHover(input.optString("ref"))
+        "browser_press_key" -> tools.browserPressKey(
+            input.optString("ref").ifBlank { null }, input.optString("key", "Enter")
+        )
+        "browser_wait_for" -> tools.browserWaitFor(
+            input.optString("text").ifBlank { null },
+            input.optString("text_gone").ifBlank { null },
+            input.optInt("time_ms", 3000)
+        )
+        "browser_handle_dialog" -> tools.browserHandleDialog(
+            input.optBoolean("accept", true), input.optString("prompt_text").ifBlank { null }
+        )
+        "browser_tabs" -> tools.browserTabs(
+            input.optString("action", "list"), if (input.has("index")) input.optInt("index") else null
+        )
+        "browser_console_messages" -> tools.browserConsoleMessages()
+        "http_send" -> tools.httpSend(
+            input.optString("raw_request"),
+            input.optBoolean("include_cookies", true),
+            input.optBoolean("follow_redirects", false)
+        )
+        "encode" -> tools.encodeDecode(input.optString("transform"), "encode", input.optString("input"))
+        "decode" -> tools.encodeDecode(input.optString("transform"), "decode", input.optString("input"))
+        "jwt_decode" -> tools.jwtDecode(input.optString("token"))
+        "dump_storage" -> tools.dumpStorage()
+        "audit_security_headers" -> tools.auditSecurityHeaders()
+        "extract_js_endpoints" -> tools.extractJsEndpoints(input.optInt("max_endpoints", 100))
+        "toggle_intercept" -> tools.toggleIntercept(input.optBoolean("enable", true))
+        "set_match_replace" -> tools.setMatchReplace(
+            input.optString("type"), input.optString("match"), input.optString("replace"),
+            input.optBoolean("is_regex", false)
+        )
+        "send_to_repeater" -> tools.sendToRepeater(input.optString("url_filter"))
         "download" -> tools.startDownload(input.optString("url").ifBlank { tools.currentUrl() })
         else -> "Unknown action \"$action\"."
     }

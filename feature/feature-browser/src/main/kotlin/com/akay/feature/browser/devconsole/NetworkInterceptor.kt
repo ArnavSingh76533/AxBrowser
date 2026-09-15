@@ -208,7 +208,9 @@ object NetworkInterceptor {
         source: String,
         wsDirection: String? = null
     ) {
-        if (source == "websocket") {
+        // WebSocket and Server-Sent-Events frames are both "messages on a connection", not
+        // request/response pairs, so they share the frame log instead of the request table.
+        if (source == "websocket" || source == "sse") {
             val direction = wsDirection ?: "recv"
             val message = if (direction == "send") requestBody else responseBody
             _webSocketFrames.update { current ->

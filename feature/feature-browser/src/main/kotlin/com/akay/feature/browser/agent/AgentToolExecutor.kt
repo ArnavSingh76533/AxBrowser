@@ -261,6 +261,32 @@ interface AgentToolExecutor {
 
     /** Hands a captured request (matched by [urlFilter]) to the Repeater tab. */
     suspend fun sendToRepeater(urlFilter: String): String
+
+    // ---------- Agent v8: plan, handoff, real touch ----------
+
+    /** Replaces the agent's working plan for this session. [items] are (text, status) pairs,
+     *  status being "pending" | "in_progress" | "done". The list is rendered live in the agent
+     *  sheet, so the operator can watch a multi-step job progress instead of guessing. Returns
+     *  the rendered checklist. */
+    suspend fun todoWrite(items: List<Pair<String, String>>): String
+
+    /** The current plan, for re-reading it mid-run instead of relying on memory. */
+    suspend fun todoRead(): String
+
+    /** Every captcha on the current page: type, provider, sitekey, kind, and the viewport
+     *  coordinates of its checkbox - enough for the agent to decide between a native tap, a
+     *  token solve, or handing off to the user. */
+    suspend fun captchaDetect(): String
+
+    /** Tries to clear the page's captchas: a native tap on each visible checkbox, then (when
+     *  [useSolver] and a key is configured) a token solve plus injection. Widgets it cannot
+     *  clear are reported honestly so the agent can hand off instead of looping. */
+    suspend fun captchaSolve(useSolver: Boolean, timeoutSec: Int): String
+
+    /** A real ACTION_DOWN/ACTION_UP touch at viewport CSS coordinates ([x], [y]). This is the
+     *  only way to reach inside a cross-origin iframe - captcha checkboxes, embedded payment
+     *  widgets, canvas apps - because same-document JS cannot click across an origin boundary. */
+    suspend fun tapAt(x: Float, y: Float): Boolean
 }
 
 data class AgentLink(val text: String, val href: String)

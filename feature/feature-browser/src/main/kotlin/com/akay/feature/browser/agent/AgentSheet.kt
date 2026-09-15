@@ -18,9 +18,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddComment
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Lightbulb
+import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.SubdirectoryArrowRight
@@ -112,6 +115,13 @@ fun AgentSheet(
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
                 }
+                // The agent's plan, shown above the conversation: a multi-step job (log in ->
+                // enumerate -> fuzz -> report) then reads as visible progress rather than a hang.
+                if (controller.todo.items.isNotEmpty()) {
+                    AgentTodoPanel(controller.todo)
+                    Spacer(Modifier.height(8.dp))
+                }
+
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.weight(1f),
@@ -281,6 +291,61 @@ private fun AnimatedVisibilityColumn(visible: Boolean, content: @Composable () -
         exit = shrinkVertically() + fadeOut()
     ) {
         content()
+    }
+}
+
+/**
+ * Live task list the agent maintains through its todo_write / todo_read tools. Kept outside the
+ * scrollable transcript on purpose - the plan stays visible while the agent works through it.
+ */
+@Composable
+private fun AgentTodoPanel(todo: AgentTodoList) {
+    val items = todo.items
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Checklist, null, modifier = Modifier.size(14.dp), tint = Primary)
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "Plan",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    "${todo.doneCount}/${todo.total} done",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            items.forEach { item ->
+                Row(modifier = Modifier.padding(vertical = 2.dp)) {
+                    val done = item.status == TodoStatus.DONE
+                    Icon(
+                        if (done) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
+                        null,
+                        modifier = Modifier.size(14.dp).padding(top = 2.dp),
+                        tint = when (item.status) {
+                            TodoStatus.DONE -> Color(0xFF4CAF50)
+                            TodoStatus.IN_PROGRESS -> Primary
+                            TodoStatus.PENDING -> MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        item.text,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (done) MaterialTheme.colorScheme.onSurfaceVariant else LocalContentColor.current,
+                        textDecoration = if (done) androidx.compose.ui.text.style.TextDecoration.LineThrough else null
+                    )
+                }
+            }
+        }
     }
 }
 

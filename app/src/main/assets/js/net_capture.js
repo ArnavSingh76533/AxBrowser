@@ -3,13 +3,16 @@
     window.__axNetCapture = true;
     if (typeof window.AxNet === 'undefined') return; // native bridge not attached
 
+    var MAX_BODY = 4096;
+
     function post(obj) {
         try { window.AxNet.log(JSON.stringify(obj)); } catch (e) {}
     }
 
-    function trunc(s) {
+    function trunc(s, limit) {
         if (typeof s !== 'string') return '';
-        return s.length > 4096 ? s.slice(0, 4096) + '…[truncated]' : s;
+        var max = limit || MAX_BODY;
+        return s.length > max ? s.slice(0, max) + '…[truncated]' : s;
     }
 
     // Normalizes any fetch body shape into text for capture. Handles the common case
@@ -66,9 +69,193 @@
         return out;
     }
 
+    function parseHeaders(raw) {
+        var out = {};
+        if (!raw) return out;
+        raw.trim().split(/[\r\n]+/).forEach(function (line) {
+            var i = line.indexOf(':');
+            if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+        });
+        return out;
+    }
+
+    // Decodes an XHR response body for whatever responseType the page used. v7 only ever
+    // read responseText, so every modern JSON API (responseType = 'json') was captured with
+    // a permanently EMPTY response body - the exact "body not captured" complaint.
+    function readXhrBody(xhr) {
+        try {
+            var rt = xhr.responseType;
+            if (rt === '' || rt === 'text') return xhr.responseText || '';
+            if (rt === 'json') return xhr.response ? JSON.stringify(xhr.response) : '';
+            if (rt === 'arraybuffer' && xhr.response) {
+                try { return new TextDecoder('utf-8', { fatal: false }).decode(xhr.response); }
+                catch (e) { return '[binary response, ' + (xhr.response.byteLength || 0) + ' bytes]'; }
+            }
+            if (rt === 'blob') {
+                try { return '[blob response, ' + (xhr.response.size || 0) + ' bytes - not read]'; }
+                catch (e) { return '[blob response]'; }
+            }
+            if (rt === 'document' && xhr.responseXML) {
+                try { return new XMLSerializer().serializeToString(xhr.responseXML); }
+                catch (e) { return '[document response]'; }
+            }
+        } catch (e) {}
+        return '';
+    }
+
+    // Reads up to N frames / M characters of a streaming response (SSE, chunked NDJSON)
+    // off a *clone*, then resolves. Without this, clone().text() on a text/event-stream
+    // never resolves - the body was silently lost forever (and the clone leaked).
+    function readEventStream(clone, done) {
+        var out = [];
+        var total = 0;
+        var frames = 0;
+        var finished = false;
+        function finish() {
+            if (finished) return;
+            finished = true;
+            done(out.join(''));
+        }
+        var reader = null;
+        try { reader = clone.body && clone.body.getReader ? clone.body.getReader() : null; } catch (e) { reader = null; }
+        if (!reader) { finish(); return; }
+        // Hard stop so a never-ending stream still reports what it managed to capture.
+        setTimeout(finish, 15000);
+        (function pump() {
+            reader.read().then(function (r) {
+                if (finished) return;
+                if (r.done) { finish(); return; }
+                try {
+                    var chunk = new TextDecoder('utf-8', { fatal: false }).decode(r.value);
+                    out.push(chunk);
+                    total += chunk.length;
+                    frames++;
+                } catch (e) {}
+                if (frames >= 20 || total >= MAX_BODY) {
+                    try { reader.cancel(); } catch (e) {}
+                    finish();
+                    return;
+                }
+                pump();
+            }).catch(function () { finish(); });
+        })();
+    }
+
+    // Reads a response's body text (or accumulated stream frames) and logs one row.
+    function logFetchResponse(res, url, method, reqHeaders, reqBodyText, start) {
+        var ct = '';
+        try { ct = res.headers && res.headers.get ? (res.headers.get('content-type') || '') : ''; } catch (e) {}
+        var headers = {};
+        try { res.headers.forEach(function (v, k) { headers[k] = v; }); } catch (e) {}
+        var clone = null;
+        try { clone = res.clone(); } catch (e) { clone = null; }
+        var respP;
+        if (!clone) {
+            respP = Promise.resolve('');
+        } else if (ct.indexOf('text/event-stream') !== -1) {
+            respP = new Promise(function (resolve) { readEventStream(clone, resolve); });
+        } else {
+            respP = clone.text().catch(function () { return ''; });
+        }
+        Promise.all([respP, reqBodyText || Promise.resolve('')]).then(function (results) {
+            post({
+                source: 'fetch', url: url, method: method,
+                status: res.status, reqBody: trunc(results[1] || ''), reqHeaders: reqHeaders,
+                respBody: trunc(results[0] || ''),
+                respHeaders: headers, durationMs: Date.now() - start,
+                type: ct
+            });
+        });
+    }
+
+    // --- Intercept: hold → decide -------------------------------------------------
+    // The switch lives in the Intercept tab; native mirrors it here. When it is on, a
+    // request is parked BEFORE it is sent: the pending call is posted to native
+    // (AxNet.hold), and the real fetch/XHR only runs once native pushes a decision back
+    // through window.__axInterceptDecide(...). This is what makes the tab's Forward /
+    // Drop / edit-body buttons do anything at all.
+    window.__axInterceptOn = false;
+    window.__axMatchReplace = [];
+    var parked = {};
+    var parkSeq = 0;
+
+    window.__axSetIntercept = function (on) { window.__axInterceptOn = !!on; };
+
+    window.__axSetMatchReplace = function (json) {
+        try { window.__axMatchReplace = typeof json === 'string' ? JSON.parse(json) : (json || []); }
+        catch (e) { window.__axMatchReplace = []; }
+    };
+
+    window.__axInterceptDecide = function (json) {
+        var d = null;
+        try { d = typeof json === 'string' ? JSON.parse(json) : json; } catch (e) { return; }
+        if (!d || !d.id) return;
+        var entry = parked[d.id];
+        if (!entry) return;
+        entry.resolve(d);
+    };
+
+    function parkAndWait(payload, timeoutMs) {
+        return new Promise(function (resolve) {
+            var id = 'axp' + (++parkSeq);
+            var settled = false;
+            function settle(decision) {
+                if (settled) return;
+                settled = true;
+                clearTimeout(safety);
+                delete parked[id];
+                resolve(decision);
+            }
+            // Safety net: a forgotten Intercept tab must never hang a site forever.
+            var safety = setTimeout(function () { settle({ action: 'forward', id: id }); }, timeoutMs || 120000);
+            parked[id] = { resolve: settle };
+            var msg = {
+                source: 'intercept', id: id, url: payload.url, method: payload.method,
+                reqHeaders: payload.headers || {}, reqBody: trunc(payload.body || ''),
+                status: null, respBody: '', respHeaders: {}, durationMs: 0, type: 'intercept'
+            };
+            try {
+                if (window.AxNet && typeof window.AxNet.hold === 'function') window.AxNet.hold(JSON.stringify(msg));
+                else throw new Error('no hold bridge');
+            } catch (e) {
+                settle({ action: 'forward', id: id });
+            }
+        });
+    }
+
+    function applyBodyRules(body, type) {
+        var out = body === undefined || body === null ? '' : String(body);
+        var list = window.__axMatchReplace || [];
+        for (var i = 0; i < list.length; i++) {
+            var r = list[i];
+            if (!r || r.type !== type) continue;
+            try {
+                if (r.regex) out = out.replace(new RegExp(r.match, 'g'), r.replace);
+                else out = out.split(String(r.match)).join(String(r.replace));
+            } catch (e) {}
+        }
+        return out;
+    }
+
+    function applyHeaderRules(headers) {
+        var out = {};
+        var src = headers || {};
+        Object.keys(src).forEach(function (k) { out[k] = src[k]; });
+        var list = window.__axMatchReplace || [];
+        for (var i = 0; i < list.length; i++) {
+            var r = list[i];
+            if (!r || r.type !== 'REPLACE_REQ_HEADER') continue;
+            var raw = String(r.match);
+            var idx = raw.indexOf(':');
+            var name = (idx > 0 ? raw.slice(0, idx) : raw).trim();
+            if (name) out[name] = String(r.replace);
+        }
+        return out;
+    }
+
     // --- fetch() ---
     // Wrapped in a function so the exact same hook can be applied to any same-origin realm
-    // (the top page, and now also same-origin iframes below) - not just `window`.
+    // (the top page, and same-origin iframes below) - not just `window`.
     function patchFetch(win) {
         var origFetch = win.fetch;
         if (!origFetch) return;
@@ -99,23 +286,79 @@
                 reqBodyPromise = Promise.resolve('');
             }
 
-            return origFetch.apply(this, arguments).then(function (res) {
-                var clone;
-                try { clone = res.clone(); } catch (e) { clone = null; }
-                var respBodyPromise = clone ? clone.text().catch(function () { return ''; }) : Promise.resolve('');
-                Promise.all([respBodyPromise, reqBodyPromise]).then(function (results) {
-                    var respText = results[0];
-                    var reqBodyText = results[1];
-                    var headers = {};
-                    try { res.headers.forEach(function (v, k) { headers[k] = v; }); } catch (e) {}
-                    post({
-                        source: 'fetch', url: url, method: method,
-                        status: res.status, reqBody: trunc(reqBodyText || ''), reqHeaders: reqHeaders,
-                        respBody: trunc(respText || ''),
-                        respHeaders: headers, durationMs: Date.now() - start,
-                        type: res.headers && res.headers.get ? (res.headers.get('content-type') || '') : ''
+            var intercepting = window.__axInterceptOn === true;
+            // Match&Replace rules apply whether or not intercept is on - that is the whole
+            // point of a silent rule (auth-header surgery, patching a body field) versus the
+            // blocking Intercept tab. They only cost anything when a rule actually matches.
+            var rulesExist = (window.__axMatchReplace || []).length > 0;
+
+            if (intercepting || rulesExist) {
+                var self = this;
+                return reqBodyPromise.then(function (captured) {
+                    var ruleBody = applyBodyRules(captured || '', 'REPLACE_REQ_BODY');
+                    var ruleHeaders = applyHeaderRules(reqHeaders);
+                    var bodyChanged = ruleBody !== (captured || '');
+                    var headersChanged = (function () {
+                        var keys = Object.keys(ruleHeaders);
+                        for (var i = 0; i < keys.length; i++) {
+                            if (reqHeaders[keys[i]] !== ruleHeaders[keys[i]]) return true;
+                        }
+                        return false;
+                    })();
+                    if (!intercepting && !bodyChanged && !headersChanged) {
+                        // Rules are configured but none of them match this call: send it exactly
+                        // as the page wrote it, so no behaviour changes for unrelated traffic.
+                        return origFetch.apply(self, arguments).then(function (res) {
+                            logFetchResponse(res, url, method, reqHeaders, Promise.resolve(captured || ''), start);
+                            return res;
+                        }).catch(function (err) {
+                            post({ source: 'fetch', url: url, method: method, status: 0,
+                                reqBody: trunc(captured || ''), reqHeaders: reqHeaders, error: String(err), durationMs: Date.now() - start });
+                            throw err;
+                        });
+                    }
+                    var park = intercepting
+                        ? parkAndWait({ url: url, method: method, headers: reqHeaders, body: ruleBody })
+                        : Promise.resolve(null);
+                    return park.then(function (d) {
+                        if (d && d.action === 'drop') {
+                            // Honest drop: the request never goes out, exactly like Burp's Drop.
+                            return Promise.reject(new TypeError('AxBrowser: request dropped by intercept'));
+                        }
+                        var finalUrl = (d && d.url) || url;
+                        var finalMethod = (d && d.method) || method;
+                        var finalHeaders = d && d.headers ? applyHeaderRules(d.headers) : ruleHeaders;
+                        var finalBody = d && d.body !== undefined && d.body !== null ? d.body : ruleBody;
+                        var opts = { method: finalMethod, headers: finalHeaders };
+                        if (init && init.credentials) opts.credentials = init.credentials;
+                        if (init && init.mode) opts.mode = init.mode;
+                        if (init && init.cache) opts.cache = init.cache;
+                        if (init && init.redirect) opts.redirect = init.redirect;
+                        if (init && init.referrer) opts.referrer = init.referrer;
+                        if (init && init.integrity) opts.integrity = init.integrity;
+                        if (init && init.signal) opts.signal = init.signal;
+                        if (init && init.keepalive) opts.keepalive = init.keepalive;
+                        if (finalBody && !/^(GET|HEAD)$/i.test(finalMethod)) opts.body = finalBody;
+                        return origFetch.call(self, finalUrl, opts).then(function (res) {
+                            // Log what actually went out (edited body/headers included), not the
+                            // page's original call - otherwise the Network tab and get_curl would
+                            // disagree with the wire.
+                            logFetchResponse(res, finalUrl, finalMethod, finalHeaders, Promise.resolve(finalBody || ''), start);
+                            return res;
+                        });
                     });
+                }).catch(function (err) {
+                    if (String(err && err.message).indexOf('dropped by intercept') === -1) {
+                        post({ source: 'fetch', url: url, method: method, status: 0,
+                            reqBody: '', reqHeaders: reqHeaders, error: String(err), durationMs: Date.now() - start });
+                    }
+                    throw err;
                 });
+            }
+
+            // No interception, no rules: send the original call untouched, capture alongside it.
+            return origFetch.apply(this, arguments).then(function (res) {
+                logFetchResponse(res, url, method, reqHeaders, reqBodyPromise, start);
                 return res;
             }).catch(function (err) {
                 reqBodyPromise.then(function (reqBodyText) {
@@ -134,8 +377,11 @@
         var origOpen = XHR.prototype.open;
         var origSend = XHR.prototype.send;
         var origSetHeader = XHR.prototype.setRequestHeader;
-        XHR.prototype.open = function (method, url) {
-            this.__ax = { method: method, url: url, start: 0, reqHeaders: {} };
+        XHR.prototype.open = function (method, url, async, user, password) {
+            this.__ax = {
+                method: method, url: url, start: 0, reqHeaders: {},
+                async: async === undefined ? true : async, user: user, password: password
+            };
             return origOpen.apply(this, arguments);
         };
         XHR.prototype.setRequestHeader = function (name, value) {
@@ -148,10 +394,7 @@
                 xhr.__ax.start = Date.now();
                 xhr.__ax.rawBody = body;
                 xhr.addEventListener('loadend', function () {
-                    var respBody = '';
-                    try {
-                        if (xhr.responseType === '' || xhr.responseType === 'text') respBody = xhr.responseText;
-                    } catch (e) {}
+                    var respBody = readXhrBody(xhr);
                     coerceBodyToText(xhr.__ax.rawBody).then(function (reqBodyText) {
                         post({
                             source: 'xhr', url: xhr.__ax.url, method: xhr.__ax.method,
@@ -164,18 +407,87 @@
                     });
                 });
             }
+            // Match&Replace on the non-intercepting path. Bodies are only rewritable when they
+            // arrived as a string (JSON/form-encoded - the overwhelming majority); an exotic
+            // Blob/stream body is left exactly as the page built it rather than re-serialized.
+            if (window.__axInterceptOn !== true && xhr.__ax) {
+                var rulesExist = (window.__axMatchReplace || []).length > 0;
+                if (rulesExist) {
+                    if (typeof body === 'string' && body.length) {
+                        var ruledBody = applyBodyRules(body, 'REPLACE_REQ_BODY');
+                        if (ruledBody !== body) { body = ruledBody; xhr.__ax.rawBody = ruledBody; }
+                    }
+                    var ruledHeaders = applyHeaderRules(xhr.__ax.reqHeaders);
+                    Object.keys(ruledHeaders).forEach(function (k) {
+                        if (xhr.__ax.reqHeaders[k] !== ruledHeaders[k]) {
+                            try { origSetHeader.call(xhr, k, ruledHeaders[k]); } catch (e) {}
+                            xhr.__ax.reqHeaders[k] = ruledHeaders[k];
+                        }
+                    });
+                }
+                return origSend.call(xhr, body);
+            }
+            if (window.__axInterceptOn === true && xhr.__ax) {
+                coerceBodyToText(body).then(function (text) {
+                    return parkAndWait({
+                        url: xhr.__ax.url, method: xhr.__ax.method, headers: xhr.__ax.reqHeaders,
+                        body: applyBodyRules(text || '', 'REPLACE_REQ_BODY')
+                    });
+                }).then(function (d) {
+                    if (!d || d.action === 'drop') {
+                        try { xhr.abort(); } catch (e) {}
+                        return;
+                    }
+                    var url = d.url || xhr.__ax.url;
+                    var method = d.method || xhr.__ax.method;
+                    var headers = applyHeaderRules(d.headers || xhr.__ax.reqHeaders);
+                    var payload = d.body !== undefined && d.body !== null ? d.body : body;
+                    try {
+                        var urlChanged = url !== xhr.__ax.url;
+                        var methodChanged = String(method).toUpperCase() !== String(xhr.__ax.method).toUpperCase();
+                        if (urlChanged || methodChanged) {
+                            origOpen.call(xhr, method, url, xhr.__ax.async, xhr.__ax.user, xhr.__ax.password);
+                            Object.keys(headers).forEach(function (k) {
+                                try { origSetHeader.call(xhr, k, headers[k]); } catch (e) {}
+                            });
+                        } else {
+                            Object.keys(headers).forEach(function (k) {
+                                if (xhr.__ax.reqHeaders[k] !== headers[k]) {
+                                    try { origSetHeader.call(xhr, k, headers[k]); } catch (e) {}
+                                }
+                            });
+                        }
+                    } catch (e) {}
+                    try { origSend.call(xhr, /^(GET|HEAD)$/i.test(method) ? undefined : payload); } catch (e) {}
+                }).catch(function () { try { origSend.call(xhr, body); } catch (e) {} });
+                return;
+            }
             return origSend.apply(this, arguments);
         };
     }
 
-    function parseHeaders(raw) {
-        var out = {};
-        if (!raw) return out;
-        raw.trim().split(/[\r\n]+/).forEach(function (line) {
-            var i = line.indexOf(':');
-            if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1).trim();
-        });
-        return out;
+    // --- navigator.sendBeacon ---
+    // Beacons (analytics, "read receipt", tracking pings) never touch fetch/XHR, so they
+    // were completely invisible before. Body is read from a copy - the beacon itself is
+    // still handed to the browser untouched.
+    function patchBeacon(win) {
+        try {
+            if (!win.navigator || typeof win.navigator.sendBeacon !== 'function') return;
+            var orig = win.navigator.sendBeacon.bind(win.navigator);
+            win.navigator.sendBeacon = function (url, data) {
+                var start = Date.now();
+                try {
+                    coerceBodyToText(data).then(function (text) {
+                        post({
+                            source: 'beacon', url: String(url), method: 'POST', status: null,
+                            reqBody: trunc(text || ''), reqHeaders: {}, respBody: '', respHeaders: {},
+                            durationMs: Date.now() - start, type: 'application/beacon'
+                        });
+                    });
+                } catch (e) {}
+                return orig.apply(win.navigator, arguments);
+            };
+        } catch (e) {}
     }
 
     // --- WebSocket ---
@@ -223,10 +535,43 @@
         win.WebSocket.CLOSED = OrigWebSocket.CLOSED;
     }
 
+    // --- EventSource (SSE) ---
+    // Server-sent-events connections are a second realtime channel sites use for feeds,
+    // notifications and (increasingly) GraphQL subscriptions. Not a request/response pair,
+    // so frames are logged individually - same shape as WebSocket frames.
+    function patchEventSource(win) {
+        var Orig = win.EventSource;
+        if (!Orig) return;
+        win.EventSource = function (url, config) {
+            var es = config !== undefined ? new Orig(url, config) : new Orig(url);
+            var target = String(url);
+            post({ source: 'sse', url: target, method: 'OPEN', status: null, reqBody: '', respBody: '',
+                reqHeaders: {}, respHeaders: {}, durationMs: 0,
+                type: 'text/event-stream', wsDirection: 'open' });
+            es.addEventListener('message', function (evt) {
+                post({ source: 'sse', url: target, method: 'MESSAGE', status: null, reqBody: '',
+                    respBody: trunc((evt && evt.data) || ''), reqHeaders: {}, respHeaders: {},
+                    durationMs: 0, type: 'text/event-stream', wsDirection: 'recv' });
+            });
+            es.addEventListener('error', function () {
+                post({ source: 'sse', url: target, method: 'ERROR', status: null, reqBody: '',
+                    respBody: '', reqHeaders: {}, respHeaders: {}, durationMs: 0,
+                    type: 'text/event-stream', wsDirection: 'close' });
+            });
+            return es;
+        };
+        win.EventSource.prototype = Orig.prototype;
+        win.EventSource.CONNECTING = Orig.CONNECTING;
+        win.EventSource.OPEN = Orig.OPEN;
+        win.EventSource.CLOSED = Orig.CLOSED;
+    }
+
     function patchRealm(win) {
         try { patchFetch(win); } catch (e) {}
         try { patchXhr(win); } catch (e) {}
         try { patchWebSocket(win); } catch (e) {}
+        try { patchEventSource(win); } catch (e) {}
+        try { patchBeacon(win); } catch (e) {}
     }
 
     patchRealm(window);
@@ -293,12 +638,14 @@
                 '      return __axOF.apply(self, arguments).then(function(resp) {',
                 '        try {',
                 '          var rh = {}; resp.headers.forEach(function(v,k){ rh[k]=v; });',
-                '          resp.clone().text().then(function(bt) {',
+                '          var __ct = resp.headers.get("content-type") || "";',
+                '          var __clone = null; try { __clone = resp.clone(); } catch (e) {}',
+                '          if (__clone) __clone.text().then(function(bt) {',
                 '            try {',
                 '              __axC.postMessage({source:"worker-fetch", url:url, method:method, status:resp.status,',
                 '                reqBody:String(reqBody).slice(0,4096), reqHeaders:(init && init.headers)||{},',
                 '                respBody:bt.slice(0,4096), respHeaders:rh, durationMs:Date.now()-t0,',
-                '                mimeType:resp.headers.get("content-type")||""});',
+                '                mimeType:__ct});',
                 '            } catch(e) {}',
                 '          }).catch(function(){});',
                 '        } catch(e) {}',

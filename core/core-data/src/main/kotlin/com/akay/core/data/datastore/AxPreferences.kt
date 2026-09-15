@@ -66,6 +66,11 @@ class AxPreferences @Inject constructor(
         val FINGERPRINT_DEVICE_SEED = stringPreferencesKey("fingerprint_device_seed")
         val PENDING_UPDATE_APK_PATH = stringPreferencesKey("pending_update_apk_path")
         val PENDING_UPDATE_VERSION = stringPreferencesKey("pending_update_version")
+        val CAPTCHA_SOLVER_ENABLED = booleanPreferencesKey("captcha_solver_enabled")
+        val CAPTCHA_SOLVER_PROVIDER = stringPreferencesKey("captcha_solver_provider")
+        val CAPTCHA_SOLVER_BASE_URL = stringPreferencesKey("captcha_solver_base_url")
+        val CAPTCHA_SOLVER_API_KEY_ENC = stringPreferencesKey("captcha_solver_api_key_enc")
+        val CAPTCHA_AUTO_CHECKBOX = booleanPreferencesKey("captcha_auto_checkbox")
     }
 
     val searchEngine: Flow<String> = context.dataStore.data.map { it[Keys.SEARCH_ENGINE] ?: "https://www.google.com/search?q=" }
@@ -124,6 +129,20 @@ class AxPreferences @Inject constructor(
     val fingerprintSpoofWebGl: Flow<Boolean> = context.dataStore.data.map { it[Keys.FINGERPRINT_SPOOF_WEBGL] ?: true }
     val fingerprintSpoofHardware: Flow<Boolean> = context.dataStore.data.map { it[Keys.FINGERPRINT_SPOOF_HARDWARE] ?: true }
     val fingerprintDeviceSeed: Flow<String> = context.dataStore.data.map { prefs -> prefs[Keys.FINGERPRINT_DEVICE_SEED] ?: "" }
+
+    // ---- Captcha solving (opt-in, bring-your-own key) ----
+    // Nothing here ships a key or an account: with no key configured the captcha tools still
+    // detect and native-tap a checkbox, and hand anything else to the person at the keyboard.
+
+    val captchaSolverEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.CAPTCHA_SOLVER_ENABLED] ?: false }
+    val captchaSolverProvider: Flow<String> = context.dataStore.data.map { it[Keys.CAPTCHA_SOLVER_PROVIDER] ?: "2captcha" }
+    /** Shared with the AI key slot pattern: one encrypted key, decrypted on read. */
+    val captchaSolverApiKey: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[Keys.CAPTCHA_SOLVER_API_KEY_ENC]?.let { enc -> runCatching { cryptoManager.decrypt(enc) }.getOrNull() }
+    }
+    val captchaSolverBaseUrl: Flow<String> = context.dataStore.data.map { it[Keys.CAPTCHA_SOLVER_BASE_URL] ?: "https://2captcha.com" }
+    /** Whether the agent/tooling may native-tap a captcha checkbox without asking first. */
+    val captchaAutoCheckbox: Flow<Boolean> = context.dataStore.data.map { it[Keys.CAPTCHA_AUTO_CHECKBOX] ?: true }
 
     /** Path to a fully-downloaded update APK waiting to be installed, and which version it is - survives navigation, backgrounding, even process death. */
     val pendingUpdateApkPath: Flow<String?> = context.dataStore.data.map { it[Keys.PENDING_UPDATE_APK_PATH] }
@@ -184,6 +203,17 @@ class AxPreferences @Inject constructor(
     suspend fun setAiModel(modelId: String) { context.dataStore.edit { it[Keys.AI_MODEL] = modelId } }
     suspend fun setAiProvider(providerId: String) { context.dataStore.edit { it[Keys.AI_PROVIDER] = providerId } }
     suspend fun setAiBaseUrl(url: String) { context.dataStore.edit { it[Keys.AI_BASE_URL] = url } }
+
+    suspend fun setCaptchaSolverEnabled(enabled: Boolean) { context.dataStore.edit { it[Keys.CAPTCHA_SOLVER_ENABLED] = enabled } }
+    suspend fun setCaptchaSolverProvider(provider: String) { context.dataStore.edit { it[Keys.CAPTCHA_SOLVER_PROVIDER] = provider } }
+    suspend fun setCaptchaSolverBaseUrl(url: String) { context.dataStore.edit { it[Keys.CAPTCHA_SOLVER_BASE_URL] = url } }
+    suspend fun setCaptchaSolverApiKey(key: String?) {
+        context.dataStore.edit {
+            if (key.isNullOrBlank()) it.remove(Keys.CAPTCHA_SOLVER_API_KEY_ENC)
+            else it[Keys.CAPTCHA_SOLVER_API_KEY_ENC] = cryptoManager.encrypt(key)
+        }
+    }
+    suspend fun setCaptchaAutoCheckbox(enabled: Boolean) { context.dataStore.edit { it[Keys.CAPTCHA_AUTO_CHECKBOX] = enabled } }
 
     suspend fun setProxyEnabled(enabled: Boolean) { context.dataStore.edit { it[Keys.PROXY_ENABLED] = enabled } }
     suspend fun setProxyRotationMode(mode: String) { context.dataStore.edit { it[Keys.PROXY_ROTATION_MODE] = mode } }

@@ -106,6 +106,29 @@ fun BrowserScreen(
         DialogBridge.setEnabled(agentSheetVisible)
         onDispose { DialogBridge.setEnabled(false) }
     }
+    // The intercept decision channel targets one WebView; drop it when this screen goes away
+    // so a decision can never be pushed into a destroyed view.
+    DisposableEffect(Unit) {
+        onDispose { com.akay.feature.pentest.intercept.PushChannel.unregister() }
+    }
+    // Mirror the Intercept switch and Match&Replace rules into the page the moment they change,
+    // so flipping the switch in the Intercept tab affects calls the current page makes next -
+    // without it, the toggle would only take effect after the next navigation.
+    val interceptEnabledNow by com.akay.feature.pentest.intercept.InterceptController.enabled.collectAsState()
+    val interceptRulesNow by com.akay.feature.pentest.intercept.InterceptController.rules.collectAsState()
+    LaunchedEffect(interceptEnabledNow, webView) {
+        webView?.evaluateJavascript(
+            "window.__axSetIntercept && window.__axSetIntercept($interceptEnabledNow);",
+            null
+        )
+    }
+    LaunchedEffect(interceptRulesNow, webView) {
+        val rulesJson = org.json.JSONObject.quote(com.akay.feature.pentest.intercept.InterceptController.rulesForJs())
+        webView?.evaluateJavascript(
+            "window.__axSetMatchReplace && window.__axSetMatchReplace($rulesJson);",
+            null
+        )
+    }
 
     // Fullscreen video state
     var fullscreenView by remember { mutableStateOf<View?>(null) }
@@ -598,10 +621,29 @@ fun BrowserScreen(
                                         canGoBack = canGoBack(),
                                         canGoForward = canGoForward()
                                     )
-                                    if (erudaEnabledState.value) {
-                                        runCatching {
-                                            ctx.assets.open("js/net_capture.js").bufferedReader().readText()
-                                        }.getOrNull()?.let { evaluateJavascript(it, null) }
+                                    // Network capture is ALWAYS on. It is the only capture path
+                                    // that can read request/response BODIES - Android's
+                                    // shouldInterceptRequest (which feeds the dev console for
+                                    // everything else) has no body API at all. Gating this behind
+                                    // the Eruda dev-tools toggle meant that with Eruda off (the
+                                    // default) no POST body was ever captured, so get_curl and the
+                                    // Network tab showed body-less requests forever.
+                                    runCatching {
+                                        ctx.assets.open("js/net_capture.js").bufferedReader().readText()
+                                    }.getOrNull()?.let { captureScript ->
+                                        evaluateJavascript(captureScript) {
+                                            // Page-JS state dies with every document, so re-publish
+                                            // the intercept switch and Match&Replace rules into
+                                            // each freshly loaded page.
+                                            evaluateJavascript(
+                                                "window.__axSetIntercept && window.__axSetIntercept(${com.akay.feature.pentest.intercept.InterceptController.enabled.value});",
+                                                null
+                                            )
+                                            evaluateJavascript(
+                                                "window.__axSetMatchReplace && window.__axSetMatchReplace(${org.json.JSONObject.quote(com.akay.feature.pentest.intercept.InterceptController.rulesForJs())});",
+                                                null
+                                            )
+                                        }
                                     }
                                     // document-start userscripts
                                     userScriptsState.value.forEach { script ->
@@ -677,6 +719,17 @@ fun BrowserScreen(
                             )
 
                             webView = this
+                            // Native -> page channel for Intercept decisions. InterceptController
+                            // holds the parked request; this pushes the operator's Forward/Drop back
+                            // into the fetch/XHR promise that is still waiting in net_capture.js.
+                            val interceptTarget = this
+                            com.akay.feature.pentest.intercept.PushChannel.register { json ->
+                                val quoted = org.json.JSONObject.quote(json)
+                                interceptTarget.evaluateJavascript(
+                                    "window.__axInterceptDecide && window.__axInterceptDecide($quoted);",
+                                    null
+                                )
+                            }
                             loadUrl(uiState.url, customHeadersState.value)
                         }
                     },
@@ -959,6 +1012,10 @@ fun BrowserScreen(
             }
         }
     }
+
+    // The agent's live plan. Shared by the executor (todo_write/todo_read), the sheet that
+    // renders it, and the engine prompt that is told to keep it current.
+    val agentTodo = remember { com.akay.feature.browser.agent.AgentTodoList() }
 
     val agentTools = remember(webView) {
         object : com.akay.feature.browser.agent.AgentToolExecutor {
@@ -1938,6 +1995,113 @@ fun BrowserScreen(
                 return "Rule added: $t: ${match.take(40)}"
             }
 
+            // ---------- Agent v8: plan, handoff, captcha ----------
+
+            override suspend fun todoWrite(items: List<Pair<String, String>>): String =
+                agentTodo.replace(items)
+
+            override suspend fun todoRead(): String = agentTodo.render()
+
+            override suspend fun captchaDetect(): String {
+                val wv = webView ?: return "No page is currently loaded."
+                val widgets = com.akay.feature.browser.captcha.CaptchaDetector.parseEnvelope(
+                    unwrapJsString(wv.evalJs(com.akay.feature.browser.captcha.CaptchaDetector.DETECT_JS))
+                )
+                if (widgets.isEmpty()) return "No captcha detected on this page."
+                return widgets.joinToString("\n") { w ->
+                    val key = if (w.sitekey.isNotBlank()) " sitekey=" + w.sitekey else ""
+                    val state = if (w.solved) " [already solved]" else ""
+                    "- " + w.label + " (" + w.kind + ")" + key +
+                        " tap=(" + w.tapX.toInt() + "," + w.tapY.toInt() + ") visible=" + w.visible + state
+                }
+            }
+
+            override suspend fun captchaSolve(useSolver: Boolean, timeoutSec: Int): String {
+                val wv = webView ?: return "No page is currently loaded."
+                val widgets = com.akay.feature.browser.captcha.CaptchaDetector.parseEnvelope(
+                    unwrapJsString(wv.evalJs(com.akay.feature.browser.captcha.CaptchaDetector.DETECT_JS))
+                )
+                if (widgets.isEmpty()) return "No captcha detected on this page - nothing to solve."
+                val report = StringBuilder()
+                for (w in widgets) {
+                    if (w.solved) {
+                        report.appendLine(w.label + ": already solved.")
+                        continue
+                    }
+                    if (w.kind == "checkbox" && w.visible && viewModel.captchaAutoCheckbox.value) {
+                        // Native touch, not a synthetic DOM click: the checkbox lives inside a
+                        // cross-origin iframe, where page JS has no reach whatsoever.
+                        tapAt(w.tapX, w.tapY)
+                        kotlinx.coroutines.delay(2000)
+                        val after = com.akay.feature.browser.captcha.CaptchaDetector.parseEnvelope(
+                            unwrapJsString(wv.evalJs(com.akay.feature.browser.captcha.CaptchaDetector.DETECT_JS))
+                        )
+                        val same = after.firstOrNull { it.type == w.type }
+                        if (same == null || same.solved) {
+                            report.appendLine(w.label + ": tapped the checkbox -> cleared.")
+                            continue
+                        }
+                        report.appendLine(w.label + ": tapped the checkbox -> still challenging.")
+                    } else if (w.kind == "interstitial" && w.visible) {
+                        tapAt(w.tapX, w.tapY)
+                        kotlinx.coroutines.delay(4000)
+                        report.appendLine(w.label + ": tapped the interstitial; if it is still showing it needs a human.")
+                    } else if (w.kind != "checkbox") {
+                        report.appendLine(
+                            w.label + ": a " + w.kind + " captcha cannot be automated on-device - this one needs a human."
+                        )
+                    }
+                    if (useSolver && w.tokenSolvable) {
+                        val apiKey = viewModel.captchaSolverApiKey.value.orEmpty()
+                        if (apiKey.isBlank()) {
+                            report.appendLine(w.label + ": no solver API key configured, so no token could be requested.")
+                        } else {
+                            val base = viewModel.captchaSolverBaseUrl.value.ifBlank {
+                                com.akay.feature.browser.captcha.CaptchaSolver.DEFAULT_BASE_URL
+                            }
+                            com.akay.feature.browser.captcha.CaptchaSolver(apiKey, base)
+                                .solve(w, currentUrl(), timeoutSec)
+                                .fold(
+                                    onSuccess = { token ->
+                                        unwrapJsString(
+                                            wv.evalJs(com.akay.feature.browser.captcha.CaptchaSolver.tokenInjectionJs(w, token))
+                                        )
+                                        report.appendLine(w.label + ": token received and injected into the provider response field.")
+                                    },
+                                    onFailure = { report.appendLine(w.label + ": solve failed - " + it.message) }
+                                )
+                        }
+                    }
+                }
+                return report.toString().trim()
+            }
+
+            override suspend fun tapAt(x: Float, y: Float): Boolean {
+                val wv = webView ?: return false
+                return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    runCatching {
+                        // Captcha coordinates are viewport CSS pixels; a touch event wants view
+                        // pixels, and the viewport maps 1:1 onto the view's own coordinate space
+                        // (scrolling included), so the density conversion is the whole job.
+                        val density = wv.resources.displayMetrics.density
+                        val px = x * density
+                        val py = y * density
+                        val downTime = android.os.SystemClock.uptimeMillis()
+                        val down = android.view.MotionEvent.obtain(
+                            downTime, downTime, android.view.MotionEvent.ACTION_DOWN, px, py, 0
+                        )
+                        val up = android.view.MotionEvent.obtain(
+                            downTime, downTime + 60, android.view.MotionEvent.ACTION_UP, px, py, 0
+                        )
+                        wv.dispatchTouchEvent(down)
+                        wv.dispatchTouchEvent(up)
+                        down.recycle()
+                        up.recycle()
+                        true
+                    }.getOrDefault(false)
+                }
+            }
+
             override suspend fun sendToRepeater(urlFilter: String): String {
                 val req = NetworkInterceptor.requests.value.lastOrNull { it.url.contains(urlFilter, true) }
                     ?: return "No captured request matching \"$urlFilter\"."
@@ -1958,7 +2122,7 @@ fun BrowserScreen(
 
     val agentScope = rememberCoroutineScope()
     val agentController = remember {
-        com.akay.feature.browser.agent.AgentChatController(agentScope, viewModel.openRouterClient, agentTools)
+        com.akay.feature.browser.agent.AgentChatController(agentScope, viewModel.openRouterClient, agentTools, agentTodo)
     }
 
     if (agentSheetVisible) {

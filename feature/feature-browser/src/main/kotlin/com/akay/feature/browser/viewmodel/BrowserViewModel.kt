@@ -262,6 +262,21 @@ class BrowserViewModel @Inject constructor(
     val aiBaseUrl: StateFlow<String> = preferences.aiBaseUrl
         .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, "https://openrouter.ai/api/v1")
 
+    // ---- Captcha solving (used by the agent's captcha tools and the Captcha dev tab) ----
+    val captchaSolverEnabled: StateFlow<Boolean> = preferences.captchaSolverEnabled
+        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, false)
+    val captchaSolverApiKey: StateFlow<String?> = preferences.captchaSolverApiKey
+        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, null)
+    val captchaSolverBaseUrl: StateFlow<String> = preferences.captchaSolverBaseUrl
+        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, "https://2captcha.com")
+    val captchaAutoCheckbox: StateFlow<Boolean> = preferences.captchaAutoCheckbox
+        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, true)
+
+    fun setCaptchaSolverApiKey(key: String?) { viewModelScope.launch { preferences.setCaptchaSolverApiKey(key) } }
+    fun setCaptchaSolverBaseUrl(url: String) { viewModelScope.launch { preferences.setCaptchaSolverBaseUrl(url) } }
+    fun setCaptchaSolverEnabled(enabled: Boolean) { viewModelScope.launch { preferences.setCaptchaSolverEnabled(enabled) } }
+    fun setCaptchaAutoCheckbox(enabled: Boolean) { viewModelScope.launch { preferences.setCaptchaAutoCheckbox(enabled) } }
+
     val activeProxy: StateFlow<com.akay.core.domain.model.ProxyServer?> = proxyManager.activeProxy
 
     fun onWebViewReady() {

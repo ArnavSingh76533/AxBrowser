@@ -34,7 +34,10 @@ class AgentTurn(val userMessage: String) {
 class AgentChatController(
     private val scope: CoroutineScope,
     private val openRouterClient: OpenRouterClient,
-    private val tools: AgentToolExecutor
+    private val tools: AgentToolExecutor,
+    /** The agent's working plan for this session, shared with the sheet that renders it and
+     *  the executor's todo_write/todo_read tools. Defaulted so nothing else has to change. */
+    val todo: AgentTodoList = AgentTodoList()
 ) {
     val turns = mutableStateListOf<AgentTurn>()
 
@@ -98,6 +101,7 @@ class AgentChatController(
 
     fun newChat() {
         turns.clear()
+        todo.clear()
         engine = null
         activeJob = null
         hasSession = false
