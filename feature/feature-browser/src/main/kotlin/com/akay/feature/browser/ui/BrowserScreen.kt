@@ -56,6 +56,7 @@ import com.akay.feature.browser.gesture.EdgeSwipeOverlay
 import com.akay.feature.browser.viewmodel.BrowserViewModel
 import com.akay.feature.browser.webview.AxNetBridge
 import com.akay.feature.browser.agent.normalizeDownloadUrl
+import com.akay.feature.browser.webview.DialogBridge
 import com.akay.feature.browser.webview.PasswordCaptureBridge
 import com.akay.feature.browser.webview.evalJs
 import com.akay.feature.browser.webview.unwrapJsString
@@ -100,6 +101,11 @@ fun BrowserScreen(
     var pasteUrl by remember { mutableStateOf("") }
     var showMenu by remember { mutableStateOf(false) }
     var agentSheetVisible by remember { mutableStateOf(false) }
+    // Park JS dialogs for the agent while its sheet is open; release any held dialog when it closes.
+    DisposableEffect(agentSheetVisible) {
+        DialogBridge.setEnabled(agentSheetVisible)
+        onDispose { DialogBridge.setEnabled(false) }
+    }
 
     // Fullscreen video state
     var fullscreenView by remember { mutableStateOf<View?>(null) }
@@ -1808,17 +1814,28 @@ fun BrowserScreen(
                     if (tabs.isEmpty()) "No open tabs." else tabs.joinToString("\n") { "- $it" }
                 }
                 "new" -> {
-                    viewModel.openInNewTab(viewModel.uiState.value.displayUrl, false)
-                    "Opened a new tab with ${viewModel.uiState.value.displayUrl}."
+                    val url = viewModel.uiState.value.displayUrl
+                    viewModel.createNewTab(url, false)
+                    "Opened a new tab with $url."
                 }
                 "close" -> {
-                    viewModel.closeCurrentTab()
-                    "Closed the current tab."
+                    val active = viewModel.uiState.value.activeTab
+                    if (active == null) "No active tab to close."
+                    else {
+                        viewModel.closeTab(active.id)
+                        "Closed the current tab."
+                    }
                 }
                 "select" -> {
                     if (index == null) "Provide an index (from browser_tabs list)."
-                    else if (viewModel.switchToTabByIndex(index)) "Switched to tab $index."
-                    else "No tab at index $index."
+                    else {
+                        val target = viewModel.uiState.value.tabs.getOrNull(index)
+                        if (target == null) "No tab at index $index."
+                        else {
+                            viewModel.setActiveTab(target)
+                            "Switched to tab $index: ${target.title.ifBlank { target.url }}."
+                        }
+                    }
                 }
                 else -> "Unknown action \"$action\" (list | new | close | select)."
             }
@@ -1933,7 +1950,7 @@ fun BrowserScreen(
                     responseBody = req.responseBody.takeIf { it.isNotBlank() }?.toByteArray(),
                     source = "capture"
                 )
-                com.akay.feature.browser.webview.RepeaterBridge.offer(tx)
+                com.akay.feature.pentest.repeater.RepeaterBridge.offer(tx)
                 return "Sent to Repeater: ${tx.method} ${tx.url.take(70)}"
             }
         }

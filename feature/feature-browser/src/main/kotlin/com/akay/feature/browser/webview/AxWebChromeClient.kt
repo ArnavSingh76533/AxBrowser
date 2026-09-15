@@ -2,6 +2,8 @@ package com.akay.feature.browser.webview
 
 import android.view.View
 import android.webkit.ConsoleMessage
+import android.webkit.JsPromptResult
+import android.webkit.JsResult
 import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
 import android.webkit.WebView
@@ -47,9 +49,26 @@ class AxWebChromeClient(
                 ConsoleMessage.MessageLevel.TIP -> "info"
                 else -> "log"
             }
+            ConsoleRing.push(level, it.message() ?: "", it.sourceId() ?: "", it.lineNumber())
             onConsoleLog(level, it.message() ?: "", it.sourceId() ?: "", it.lineNumber())
         }
         return true
+    }
+
+    /** JS dialogs go to the agent's DialogBridge queue while the agent is active; stock dialogs otherwise. */
+    override fun onJsAlert(view: WebView?, url: String?, message: String?, result: JsResult?): Boolean {
+        if (result == null || !DialogBridge.enabled.value) return super.onJsAlert(view, url, message, result)
+        return DialogBridge.enqueue("alert", url ?: "", message ?: "", "") { accepted, _ -> result.confirm(accepted) }
+    }
+
+    override fun onJsConfirm(view: WebView?, url: String?, message: String?, result: JsResult?): Boolean {
+        if (result == null || !DialogBridge.enabled.value) return super.onJsConfirm(view, url, message, result)
+        return DialogBridge.enqueue("confirm", url ?: "", message ?: "", "") { accepted, _ -> result.confirm(accepted) }
+    }
+
+    override fun onJsPrompt(view: WebView?, url: String?, message: String?, defaultValue: String?, result: JsPromptResult?): Boolean {
+        if (result == null || !DialogBridge.enabled.value) return super.onJsPrompt(view, url, message, defaultValue, result)
+        return DialogBridge.enqueue("prompt", url ?: "", message ?: "", defaultValue ?: "") { accepted, v -> if (accepted) result.confirm(v) else result.cancel() }
     }
 
     override fun onPermissionRequest(request: PermissionRequest?) {

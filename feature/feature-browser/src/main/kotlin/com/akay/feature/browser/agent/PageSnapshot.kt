@@ -34,7 +34,7 @@ class PageSnapshot {
     /** Parses the SNAPSHOT JSON result and returns the model-facing text. */
     fun parse(rawJson: String, maxNodes: Int = 150): String {
         refs.clear()
-        val cleaned = unwrap(rawJson)
+        val cleaned = unwrapJsString(rawJson)
         val obj = runCatching { JSONObject(cleaned) }.getOrNull()
             ?: return "(snapshot failed: unparseable result)"
         lastUrl = obj.optString("url")

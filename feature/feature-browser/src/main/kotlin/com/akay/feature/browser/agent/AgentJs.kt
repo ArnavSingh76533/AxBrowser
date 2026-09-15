@@ -187,7 +187,8 @@ object AgentJs {
      * - Pentest extras: flags input[type=password], surfaces CSRF-looking hidden fields, and
      *   reports <form action> targets so the agent can reason about login forms without a DOM dump.
      */
-    const val SNAPSHOT = """
+    // Not `const` on purpose: trimIndent() is a runtime call, so a compile-time constant is impossible.
+    val SNAPSHOT = """
         (function() {
             function cssPath(el) {
                 var parts = [];
@@ -359,7 +360,7 @@ object AgentJs {
     }
 
     /** Reads back the CSRF/hidden-field/form summary from the last snapshot's interest areas (cheap re-ask). */
-    const val STORAGE_DUMP = """
+    val STORAGE_DUMP = """
         (function() {
             function dump(s) { try { return JSON.stringify(JSON.parse(JSON.stringify(s || {}))).slice(0, 4000); } catch (e) { return String(s).slice(0, 4000); } }
             return JSON.stringify({
