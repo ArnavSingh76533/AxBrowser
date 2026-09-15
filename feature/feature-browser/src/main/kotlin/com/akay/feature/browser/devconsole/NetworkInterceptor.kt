@@ -22,7 +22,11 @@ data class NetworkRequest(
     val isBlocked: Boolean = false,
     val requestBody: String = "",
     val responseBody: String = "",
-    val source: String = "webview"
+    val source: String = "webview",
+    /** URL of the page the request was issued from. Used only as a resolution base for [url]
+     *  when it is not already absolute - net_capture.js reports absolute URLs, so this is a
+     *  safety net, not the primary path. */
+    val pageUrl: String = ""
 ) {
     val isMedia: Boolean
         get() {
@@ -109,7 +113,10 @@ data class NetworkRequest(
     fun toCurl(extraHeaders: Map<String, String> = emptyMap(), sanitize: Boolean = false): String {
         val sb = StringBuilder("curl --compressed")
         if (!method.equals("GET", ignoreCase = true)) sb.append(" -X ").append(method)
-        sb.append(" '").append(url).append("'")
+        // Always emit a full URL. A bare path like '/api/v0/chat/completion' produces a curl
+        // command with no scheme and no host that cannot be replayed anywhere; resolve it
+        // against the page it came from instead.
+        sb.append(" '").append(absoluteUrl()).append("'")
         val merged = LinkedHashMap<String, String>()
         requestHeaders.forEach { (k, v) -> merged[k] = v }
         extraHeaders.forEach { (k, v) -> merged.putIfAbsent(k, v) }
@@ -133,6 +140,23 @@ data class NetworkRequest(
         val trimmed = body.trimStart()
         if (trimmed.startsWith("[")) JSONArray(body).toString(2) else JSONObject(body).toString(2)
     }.getOrDefault(body)
+
+    /** This request's URL, guaranteed to carry a scheme+host when it can possibly be derived.
+     *  Absolute URLs pass through untouched; a relative one is resolved against [pageUrl]. */
+    fun absoluteUrl(): String = absolutize(url, pageUrl)
+}
+
+/** Resolves [raw] against [base] when [raw] is relative. Returns [raw] unchanged when it is
+ *  already absolute or when no usable base is known - never invents a host. */
+internal fun absolutize(raw: String, base: String): String {
+    val r = raw.trim()
+    if (r.isEmpty()) return raw
+    val lower = r.lowercase()
+    val schemes = listOf("http://", "https://", "ws://", "wss://", "data:", "blob:", "file:", "content://")
+    if (schemes.any { lower.startsWith(it) }) return r
+    if (base.isBlank()) return raw
+    return runCatching { java.net.URL(java.net.URL(base), r).toString() }
+        .getOrElse { runCatching { java.net.URI(base).resolve(r).toString() }.getOrDefault(raw) }
 }
 
 data class WebSocketFrame(
@@ -206,21 +230,23 @@ object NetworkInterceptor {
         mimeType: String?,
         durationMs: Long,
         source: String,
-        wsDirection: String? = null
+        wsDirection: String? = null,
+        pageUrl: String = ""
     ) {
+        val resolvedUrl = absolutize(url, pageUrl)
         // WebSocket and Server-Sent-Events frames are both "messages on a connection", not
         // request/response pairs, so they share the frame log instead of the request table.
         if (source == "websocket" || source == "sse") {
             val direction = wsDirection ?: "recv"
             val message = if (direction == "send") requestBody else responseBody
             _webSocketFrames.update { current ->
-                val updated = current + WebSocketFrame(url = url, direction = direction, message = message)
+                val updated = current + WebSocketFrame(url = resolvedUrl, direction = direction, message = message)
                 if (updated.size > MAX_WS_FRAMES) updated.drop(updated.size - MAX_WS_FRAMES) else updated
             }
             return
         }
         val req = NetworkRequest(
-            url = url,
+            url = resolvedUrl,
             method = method,
             responseStatus = status,
             requestHeaders = requestHeaders,
@@ -229,7 +255,8 @@ object NetworkInterceptor {
             durationMs = durationMs,
             requestBody = requestBody,
             responseBody = responseBody,
-            source = source
+            source = source,
+            pageUrl = pageUrl
         )
         _requests.update { current ->
             // The native WebViewClient intercept (source == "webview") already logged this exact
@@ -240,7 +267,7 @@ object NetworkInterceptor {
             // so get_curl/get_network_requests/export_har only ever see ONE entry per request -
             // and it's always the complete one, never a coin-flip between the two.
             val placeholderIdx = current.indexOfLast {
-                it.url == url && it.method.equals(method, ignoreCase = true) &&
+                it.url == resolvedUrl && it.method.equals(method, ignoreCase = true) &&
                     it.source == "webview" && it.requestBody.isBlank() &&
                     System.currentTimeMillis() - it.startTime in 0..15000
             }
@@ -251,7 +278,7 @@ object NetworkInterceptor {
                 if (updated.size > MAX_ENTRIES) updated.drop(updated.size - MAX_ENTRIES) else updated
             }
         }
-        maybeAddMedia(url, mimeType)
+        maybeAddMedia(resolvedUrl, mimeType)
     }
 
     /** Minimal HAR 1.2 export of everything captured so far, for loading into Charles/Postman/

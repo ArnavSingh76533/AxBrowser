@@ -6,13 +6,37 @@
     var MAX_BODY = 4096;
 
     function post(obj) {
-        try { window.AxNet.log(JSON.stringify(obj)); } catch (e) {}
+        try {
+            // The page URL this capture was observed from, so native can still resolve a
+            // relative URL if one somehow slips through absUrl below.
+            if (obj && !obj.pageUrl) { try { obj.pageUrl = location.href; } catch (e) {} }
+            window.AxNet.log(JSON.stringify(obj));
+        } catch (e) {}
     }
 
     function trunc(s, limit) {
         if (typeof s !== 'string') return '';
         var max = limit || MAX_BODY;
         return s.length > max ? s.slice(0, max) + '…[truncated]' : s;
+    }
+
+    // Resolves a URL against the realm it was issued from and returns an absolute one.
+    // Pages routinely call fetch('/api/v0/chat/completion') with a RELATIVE path, and every
+    // hook below used to report exactly that string. A relative URL is useless downstream:
+    // get_curl then emitted `curl --compressed -X POST '/api/v0/chat/completion'` - no scheme,
+    // no host, nothing curl can actually connect to. Every capture site now resolves through
+    // here (top page, same-origin iframe realm, or worker script URL) so the Network tab, the
+    // copied curl, HAR export, Repeater and the agent tools all see the full URL.
+    function absUrl(u, win) {
+        try {
+            if (u === undefined || u === null) return '';
+            var s = String(u);
+            if (!s) return '';
+            var base = null;
+            try { base = (win && win.location && win.location.href) || location.href; }
+            catch (e) { base = location.href; }
+            return new URL(s, base).toString();
+        } catch (e) { return String(u); }
     }
 
     // Normalizes any fetch body shape into text for capture. Handles the common case
@@ -212,7 +236,10 @@
             var msg = {
                 source: 'intercept', id: id, url: payload.url, method: payload.method,
                 reqHeaders: payload.headers || {}, reqBody: trunc(payload.body || ''),
-                status: null, respBody: '', respHeaders: {}, durationMs: 0, type: 'intercept'
+                status: null, respBody: '', respHeaders: {}, durationMs: 0, type: 'intercept',
+                // Same reason as post() below: native resolves a relative url against this, so a
+                // pending request can never show up in the Intercept tab as a bare path.
+                pageUrl: (function () { try { return location.href; } catch (e) { return ''; } })()
             };
             try {
                 if (window.AxNet && typeof window.AxNet.hold === 'function') window.AxNet.hold(JSON.stringify(msg));
@@ -262,7 +289,7 @@
         win.fetch = function (input, init) {
             var start = Date.now();
             var isRequestObj = typeof win.Request !== 'undefined' && input instanceof win.Request;
-            var url = (typeof input === 'string') ? input : (input && input.url) || '';
+            var url = absUrl((typeof input === 'string') ? input : (input && input.url) || '', win);
             var method = (init && init.method) || (input && input.method) || 'GET';
             var reqHeaders = headersToMap(init && init.headers);
             if (isRequestObj && input.headers) {
@@ -379,7 +406,7 @@
         var origSetHeader = XHR.prototype.setRequestHeader;
         XHR.prototype.open = function (method, url, async, user, password) {
             this.__ax = {
-                method: method, url: url, start: 0, reqHeaders: {},
+                method: method, url: absUrl(url, win), start: 0, reqHeaders: {},
                 async: async === undefined ? true : async, user: user, password: password
             };
             return origOpen.apply(this, arguments);
@@ -479,7 +506,7 @@
                 try {
                     coerceBodyToText(data).then(function (text) {
                         post({
-                            source: 'beacon', url: String(url), method: 'POST', status: null,
+                            source: 'beacon', url: absUrl(url, win), method: 'POST', status: null,
                             reqBody: trunc(text || ''), reqHeaders: {}, respBody: '', respHeaders: {},
                             durationMs: Date.now() - start, type: 'application/beacon'
                         });
@@ -499,14 +526,15 @@
         if (!OrigWebSocket) return;
         win.WebSocket = function (url, protocols) {
             var ws = protocols !== undefined ? new OrigWebSocket(url, protocols) : new OrigWebSocket(url);
-            post({ source: 'websocket', url: String(url), method: 'OPEN', status: null,
+            var target = absUrl(url, win);
+            post({ source: 'websocket', url: target, method: 'OPEN', status: null,
                 reqBody: '', respBody: '', durationMs: 0,
                 type: 'websocket', wsDirection: 'open' });
 
             ws.addEventListener('message', function (evt) {
                 var data = evt && evt.data;
                 var text = (typeof data === 'string') ? data : '[binary frame]';
-                post({ source: 'websocket', url: String(url), method: 'MESSAGE', status: null,
+                post({ source: 'websocket', url: target, method: 'MESSAGE', status: null,
                     reqBody: '', respBody: trunc(text), durationMs: 0,
                     type: 'websocket', wsDirection: 'recv' });
             });
@@ -514,14 +542,14 @@
             var origWsSend = ws.send.bind(ws);
             ws.send = function (data) {
                 var text = (typeof data === 'string') ? data : '[binary frame]';
-                post({ source: 'websocket', url: String(url), method: 'SEND', status: null,
+                post({ source: 'websocket', url: target, method: 'SEND', status: null,
                     reqBody: trunc(text), respBody: '', durationMs: 0,
                     type: 'websocket', wsDirection: 'send' });
                 return origWsSend(data);
             };
 
             ws.addEventListener('close', function (evt) {
-                post({ source: 'websocket', url: String(url), method: 'CLOSE', status: evt ? evt.code : null,
+                post({ source: 'websocket', url: target, method: 'CLOSE', status: evt ? evt.code : null,
                     reqBody: '', respBody: '', durationMs: 0,
                     type: 'websocket', wsDirection: 'close' });
             });
@@ -544,7 +572,7 @@
         if (!Orig) return;
         win.EventSource = function (url, config) {
             var es = config !== undefined ? new Orig(url, config) : new Orig(url);
-            var target = String(url);
+            var target = absUrl(url, win);
             post({ source: 'sse', url: target, method: 'OPEN', status: null, reqBody: '', respBody: '',
                 reqHeaders: {}, respHeaders: {}, durationMs: 0,
                 type: 'text/event-stream', wsDirection: 'open' });
@@ -629,9 +657,15 @@
                 '(function(){try{',
                 '  var __axC = new BroadcastChannel(' + JSON.stringify(CAPTURE_CHANNEL) + ');',
                 '  var __axOF = self.fetch;',
+                // A worker created from a blob: URL cannot resolve relative paths against its own
+                // location (blob URLs are not hierarchical, so new URL(relative, blobUrl) throws).
+                // The page URL is baked in here as the base instead - for the classic
+                // same-origin workers this shim wraps, that is the same origin the page uses.
+                '  var __axBase = ' + JSON.stringify(location.href) + ';',
+                '  function __axAbs(u) { try { return new URL(String(u || ""), __axBase).toString(); } catch (e) { return String(u || ""); } }',
                 '  if (typeof __axOF === "function") {',
                 '    self.fetch = function(input, init) {',
-                '      var url = typeof input === "string" ? input : (input && input.url) || "";',
+                '      var url = __axAbs(typeof input === "string" ? input : (input && input.url) || "");',
                 '      var method = (init && init.method) || (input && input.method) || "GET";',
                 '      var reqBody = (init && init.body) || "";',
                 '      var t0 = Date.now();',

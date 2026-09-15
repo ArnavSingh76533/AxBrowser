@@ -2,6 +2,7 @@ package com.akay.feature.browser.webview
 
 import android.webkit.JavascriptInterface
 import com.akay.feature.browser.devconsole.NetworkInterceptor
+import com.akay.feature.browser.devconsole.absolutize
 import com.akay.feature.pentest.intercept.InterceptController
 import org.json.JSONObject
 
@@ -39,7 +40,9 @@ class AxNetBridge {
                 mimeType = o.optString("type", "").ifBlank { null },
                 durationMs = o.optLong("durationMs", 0L),
                 source = o.optString("source", "js"),
-                wsDirection = o.optString("wsDirection").ifBlank { null }
+                wsDirection = o.optString("wsDirection").ifBlank { null },
+                // lets NetworkInterceptor resolve a relative URL if capture ever reports one
+                pageUrl = o.optString("pageUrl", "")
             )
         }
     }
@@ -63,7 +66,7 @@ class AxNetBridge {
             }
             InterceptController.hold(
                 id = o.optString("id"),
-                url = o.optString("url"),
+                url = absolutize(o.optString("url"), o.optString("pageUrl", "")),
                 method = o.optString("method", "GET"),
                 headers = headers,
                 body = o.optString("reqBody", "")
