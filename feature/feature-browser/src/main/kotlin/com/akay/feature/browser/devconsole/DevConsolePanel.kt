@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -33,6 +34,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.akay.core.domain.model.HttpTransaction
+import com.akay.feature.pentest.repeater.RepeaterBridge
+import com.akay.feature.pentest.ui.AuditTab
+import com.akay.feature.pentest.ui.DecoderTab
+import com.akay.feature.pentest.ui.InterceptTab
+import com.akay.feature.pentest.ui.IntruderTab
+import com.akay.feature.pentest.ui.RepeaterTab
 
 private enum class NetFilter(val label: String) {
     ALL("All"), XHR("XHR/Fetch"), JS("JS"), CSS("CSS"), IMG("Img"), MEDIA("Media"), DOC("Doc"), BLOCKED("Blocked")
@@ -50,7 +58,20 @@ fun DevConsolePanel(
     val rules by NetworkInterceptor.rules.collectAsState()
     var selectedTab by remember { mutableIntStateOf(0) }
     var selectedRequest by remember { mutableStateOf<NetworkRequest?>(null) }
-    val tabs = listOf("Network (${requests.size})", "Interceptor (${rules.size})", "Elements", "Info")
+    val tabs = listOf(
+        "Network (${requests.size})",
+        "Intercept",
+        "Repeater",
+        "Intruder",
+        "Decoder",
+        "Audit",
+        "Rules (${rules.size})",
+        "Elements",
+        "Info"
+    )
+    // The pentest Audit tab speaks the shared HttpTransaction shape. Build it from what this
+    // session actually captured so it reports real findings instead of sitting empty.
+    val auditTransactions = remember(requests) { requests.map { it.toTransaction() } }
 
     if (isVisible) {
         ModalBottomSheet(
@@ -64,7 +85,7 @@ fun DevConsolePanel(
                 ) {
                     Icon(Icons.Default.BugReport, null, tint = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.width(8.dp))
-                    Text("Network Inspector", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    Text("Dev Tools", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                     if (selectedTab == 0) {
                         IconButton(onClick = { NetworkInterceptor.clear() }) {
                             Icon(Icons.Default.DeleteSweep, "Clear")
@@ -89,14 +110,23 @@ fun DevConsolePanel(
 
                 when (selectedTab) {
                     0 -> NetworkTab(requests = requests, onSelectRequest = { selectedRequest = it })
-                    1 -> RulesTab(rules = rules)
-                    2 -> ElementsTab(html = currentPageHtml)
-                    3 -> InfoTab(url = currentPageUrl, requestCount = requests.size, ruleCount = rules.size)
+                    1 -> InterceptTab()
+                    2 -> RepeaterTab()
+                    3 -> IntruderTab()
+                    4 -> DecoderTab()
+                    5 -> AuditTab(transactions = auditTransactions)
+                    6 -> RulesTab(rules = rules)
+                    7 -> ElementsTab(html = currentPageHtml)
+                    8 -> InfoTab(url = currentPageUrl, requestCount = requests.size, ruleCount = rules.size)
                 }
             }
 
             selectedRequest?.let { req ->
-                RequestDetailSheet(request = req, onDismiss = { selectedRequest = null })
+                RequestDetailSheet(
+                    request = req,
+                    onDismiss = { selectedRequest = null },
+                    onSendToRepeater = { selectedTab = 2 }
+                )
             }
         }
     }
@@ -222,7 +252,11 @@ fun NetworkRequestRow(request: NetworkRequest, onClick: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RequestDetailSheet(request: NetworkRequest, onDismiss: () -> Unit) {
+fun RequestDetailSheet(
+    request: NetworkRequest,
+    onDismiss: () -> Unit,
+    onSendToRepeater: () -> Unit = {}
+) {
     val context = LocalContext.current
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -246,6 +280,18 @@ fun RequestDetailSheet(request: NetworkRequest, onDismiss: () -> Unit) {
                     onClick = { copyToClipboard(context, "cURL", request.toCurl()) },
                     label = { Text("Copy as cURL", fontSize = 12.sp) },
                     leadingIcon = { Icon(Icons.Default.ContentCopy, null, modifier = Modifier.size(16.dp)) }
+                )
+                AssistChip(
+                    onClick = {
+                        // Hand the captured request to the pentest Repeater and switch the dev
+                        // console over to it, so capture -> tamper -> resend is one tap.
+                        RepeaterBridge.offer(request.toTransaction())
+                        Toast.makeText(context, "Sent to Repeater", Toast.LENGTH_SHORT).show()
+                        onSendToRepeater()
+                        onDismiss()
+                    },
+                    label = { Text("Send to Repeater", fontSize = 12.sp) },
+                    leadingIcon = { Icon(Icons.Default.Send, null, modifier = Modifier.size(16.dp)) }
                 )
                 AssistChip(
                     onClick = {
@@ -456,6 +502,23 @@ fun InfoRow(label: String, value: String) {
         }
     }
 }
+
+/**
+ * Adapter from the dev console's captured request into the pentest module's shared
+ * request/response shape, so Repeater and Audit can consume live traffic directly instead of
+ * waiting on a persistence step that does not exist yet.
+ */
+private fun NetworkRequest.toTransaction(): HttpTransaction = HttpTransaction(
+    method = method,
+    url = url,
+    headers = requestHeaders.toList(),
+    body = requestBody.takeIf { it.isNotBlank() }?.toByteArray(),
+    responseStatus = responseStatus,
+    responseHeaders = responseHeaders.toList(),
+    responseBody = responseBody.takeIf { it.isNotBlank() }?.toByteArray(),
+    responseTimeMs = durationMs,
+    source = "capture"
+)
 
 private fun copyToClipboard(context: Context, label: String, text: String) {
     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
