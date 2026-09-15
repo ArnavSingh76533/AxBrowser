@@ -58,12 +58,12 @@ class AxWebChromeClient(
     /** JS dialogs go to the agent's DialogBridge queue while the agent is active; stock dialogs otherwise. */
     override fun onJsAlert(view: WebView?, url: String?, message: String?, result: JsResult?): Boolean {
         if (result == null || !DialogBridge.enabled.value) return super.onJsAlert(view, url, message, result)
-        return DialogBridge.enqueue("alert", url ?: "", message ?: "", "") { accepted, _ -> result.confirm(accepted) }
+        return DialogBridge.enqueue("alert", url ?: "", message ?: "", "") { accepted, _ -> if (accepted) result.confirm() else result.cancel() }
     }
 
     override fun onJsConfirm(view: WebView?, url: String?, message: String?, result: JsResult?): Boolean {
         if (result == null || !DialogBridge.enabled.value) return super.onJsConfirm(view, url, message, result)
-        return DialogBridge.enqueue("confirm", url ?: "", message ?: "", "") { accepted, _ -> result.confirm(accepted) }
+        return DialogBridge.enqueue("confirm", url ?: "", message ?: "", "") { accepted, _ -> if (accepted) result.confirm() else result.cancel() }
     }
 
     override fun onJsPrompt(view: WebView?, url: String?, message: String?, defaultValue: String?, result: JsPromptResult?): Boolean {
