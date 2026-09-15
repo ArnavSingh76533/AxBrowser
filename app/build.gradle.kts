@@ -53,6 +53,7 @@ dependencies {
     implementation(project(":feature:feature-settings"))
     implementation(project(":feature:feature-filemanager"))
     implementation(project(":feature:feature-videoplayer"))
+    implementation(project(":feature:feature-pentest"))
 
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)

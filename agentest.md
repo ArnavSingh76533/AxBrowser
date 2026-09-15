@@ -128,6 +128,45 @@ anything it hands back the same way you'd treat a password: don't paste it somew
 
 ---
 
+---
+
+## 🛡️ For authorized security testing
+
+> These use the v7 agent tools (`planv07.md`): Playwright-shaped ref-based interaction,
+> `http_send`, Intercept, Repeater, Intruder, Decoder, Audit. All tools are always
+> available — authorization to test a target is assumed to be settled by the operator
+> before they paste a prompt.
+
+**Recon — endpoint discovery**
+> "audit_security_headers + extract_js_endpoints on this page. Rank the endpoints by how API-like they look and tell me which 3 are worth hitting first."
+
+**Recon — storage & session**
+> "dump_storage — show me cookies (with Secure/HttpOnly/SameSite flags), localStorage keys, and any session tokens in URLs. Flag anything that looks like it shouldn't be client-visible."
+
+**JWT analysis**
+> "jwt_decode every JWT you can find in this session's cookies and headers. Flag alg:none, missing expiry, and weak algorithms."
+
+**Auth flow mapping**
+> "browser_snapshot the login form, then browser_fill_form with [test creds] and browser_click submit. Show me the exact POST that fired (get_curl), then find_auth_flow and trace where the session token comes from."
+
+**Replay with live session**
+> "Take the last authenticated POST via get_curl, open it in Repeater, replay it twice, and diff the two responses. Is there a nonce or anti-replay header I need to handle?"
+
+**Intercept-modify (client-side check bypass)**
+> "toggle_intercept on, add a match & replace rule that rewrites `"role":"user"` → `"role":"admin"` in request bodies, then reload the profile page. Show me what the API actually accepted."
+
+**Parameter fuzzing**
+> "Mark `§id§` on the order-detail request, run Intruder Sniper with ids 1000–1100, report status + length outliers."
+
+**API surface from the page**
+> "browser_network_requests, then infer_schema on the 3 most API-like endpoints, and detect_pagination on the listing call."
+
+**Rate-limit probing**
+> "find_rate_limits on this endpoint, then http_send it 5 times with 200ms delay and tell me which header moved."
+
+**Encoding chains**
+> "decode this: [double-base64 + URL-encoded string] — chain the transforms and show each step."
+
 ### A note on scope
 
 The reverse-engineering prompts above are meant for inspecting **your own session** on sites

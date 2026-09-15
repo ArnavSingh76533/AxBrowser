@@ -1705,6 +1705,237 @@ fun BrowserScreen(
                     " (app-private storage - set a save location in Settings > Storage to make files like this visible outside the app)"
                 } else ""
             }
+            // ---------- Playwright-MCP-shaped tools (v7) ----------
+
+            private val pageSnapshot = com.akay.feature.browser.agent.PageSnapshot()
+
+            override suspend fun browserSnapshot(maxNodes: Int): String {
+                val wv = webView ?: return "No page is currently loaded."
+                val text = pageSnapshot.take({ script -> unwrapJsString(wv.evalJs(script)) }, maxNodes)
+                if (pageSnapshot.refCount() == 0) return "(empty snapshot - the page may have no interactive elements)\n" + text
+                return text
+            }
+
+            override suspend fun browserClick(ref: String): String {
+                val wv = webView ?: return "No page is currently loaded."
+                val path = pageSnapshot.pathFor(ref)
+                    ?: return "Unknown or stale ref \"$ref\" - take a fresh browser_snapshot first."
+                val result = unwrapJsString(wv.evalJs(com.akay.feature.browser.agent.AgentJs.clickByPath(path)))
+                if (result == "notfound") {
+                    pageSnapshot.invalidate()
+                    return "Element for \"$ref\" no longer exists - the DOM changed. Take a fresh browser_snapshot."
+                }
+                waitForLoad()
+                val nowUrl = wv.url ?: ""
+                val changed = nowUrl != pageSnapshot.lastUrl
+                return if (changed) "Clicked $ref; page navigated to $nowUrl. Take a fresh browser_snapshot."
+                else "Clicked $ref. Take browser_snapshot if you need the new state."
+            }
+
+            override suspend fun browserType(ref: String, text: String, submit: Boolean): String {
+                val wv = webView ?: return "No page is currently loaded."
+                val path = pageSnapshot.pathFor(ref)
+                    ?: return "Unknown or stale ref \"$ref\" - take a fresh browser_snapshot first."
+                val result = unwrapJsString(wv.evalJs(com.akay.feature.browser.agent.AgentJs.typeByPath(path, text)))
+                if (result == "notfound") return "Element for \"$ref\" no longer exists. Take a fresh browser_snapshot."
+                if (submit) {
+                    unwrapJsString(wv.evalJs(com.akay.feature.browser.agent.AgentJs.pressKeyByPath(path, "Enter")))
+                    waitForLoad()
+                }
+                return "Typed ${text.length} chars into $ref" + if (submit) " and pressed Enter." else "."
+            }
+
+            override suspend fun browserFillForm(fields: List<Triple<String, String, String>>): String {
+                if (fields.isEmpty()) return "No fields provided."
+                val results = fields.map { (ref, value, submitFlag) ->
+                    browserType(ref, value, submitFlag == "true")
+                }
+                return "Filled ${fields.size} fields:\n" + results.joinToString("\n") { "- $it" }
+            }
+
+            override suspend fun browserSelectOption(ref: String, values: List<String>): String {
+                val wv = webView ?: return "No page is currently loaded."
+                val path = pageSnapshot.pathFor(ref)
+                    ?: return "Unknown or stale ref \"$ref\" - take a fresh browser_snapshot first."
+                val result = unwrapJsString(wv.evalJs(com.akay.feature.browser.agent.AgentJs.selectOptionByPath(path, values)))
+                return if (result == "ok") "Selected ${values.joinToString()} on $ref." else "Element for \"$ref\" no longer exists."
+            }
+
+            override suspend fun browserHover(ref: String): String {
+                val wv = webView ?: return "No page is currently loaded."
+                val path = pageSnapshot.pathFor(ref) ?: return "Unknown or stale ref \"$ref\"."
+                val result = unwrapJsString(wv.evalJs(com.akay.feature.browser.agent.AgentJs.hoverByPath(path)))
+                return if (result == "ok") "Hovered $ref." else "Element for \"$ref\" no longer exists."
+            }
+
+            override suspend fun browserPressKey(ref: String?, key: String): String {
+                val wv = webView ?: return "No page is currently loaded."
+                val path = ref?.let { pageSnapshot.pathFor(it) } ?: ""
+                val result = unwrapJsString(wv.evalJs(com.akay.feature.browser.agent.AgentJs.pressKeyByPath(path, key)))
+                if (key == "Enter") waitForLoad()
+                return if (result == "ok") "Pressed $key." else "Could not press key (element not found or no active element)."
+            }
+
+            override suspend fun browserWaitFor(text: String?, textGone: String?, timeMs: Int): String {
+                val wv = webView ?: return "No page is currently loaded."
+                val deadline = System.currentTimeMillis() + timeMs.coerceIn(500, 15000)
+                if (!text.isNullOrBlank()) {
+                    while (System.currentTimeMillis() < deadline) {
+                        val body = unwrapJsString(wv.evalJs(com.akay.feature.browser.agent.AgentJs.GET_PAGE_TEXT))
+                        if (body.contains(text, ignoreCase = true)) return "Text appeared: \"$text\""
+                        kotlinx.coroutines.delay(300)
+                    }
+                    return "Timeout waiting for text \"$text\"."
+                }
+                if (!textGone.isNullOrBlank()) {
+                    while (System.currentTimeMillis() < deadline) {
+                        val body = unwrapJsString(wv.evalJs(com.akay.feature.browser.agent.AgentJs.GET_PAGE_TEXT))
+                        if (!body.contains(textGone, ignoreCase = true)) return "Text gone: \"$textGone\""
+                        kotlinx.coroutines.delay(300)
+                    }
+                    return "Timeout waiting for \"$textGone\" to disappear."
+                }
+                kotlinx.coroutines.delay(timeMs.coerceIn(0, 15000).toLong())
+                return "Waited ${timeMs}ms."
+            }
+
+            override suspend fun browserHandleDialog(accept: Boolean, promptText: String?): String =
+                com.akay.feature.browser.webview.DialogBridge.respond(accept, promptText)
+
+            override suspend fun browserTabs(action: String, index: Int?): String = when (action.lowercase()) {
+                "list" -> {
+                    val tabs = listTabs()
+                    if (tabs.isEmpty()) "No open tabs." else tabs.joinToString("\n") { "- $it" }
+                }
+                "new" -> {
+                    viewModel.openInNewTab(viewModel.uiState.value.displayUrl, false)
+                    "Opened a new tab with ${viewModel.uiState.value.displayUrl}."
+                }
+                "close" -> {
+                    viewModel.closeCurrentTab()
+                    "Closed the current tab."
+                }
+                "select" -> {
+                    if (index == null) "Provide an index (from browser_tabs list)."
+                    else if (viewModel.switchToTabByIndex(index)) "Switched to tab $index."
+                    else "No tab at index $index."
+                }
+                else -> "Unknown action \"$action\" (list | new | close | select)."
+            }
+
+            override suspend fun browserConsoleMessages(): String =
+                com.akay.feature.browser.webview.ConsoleRing.recent()
+
+            // ---------- Pentest tools (v7): always available, no gating ----------
+
+            override suspend fun httpSend(rawRequest: String, includeCookies: Boolean, followRedirects: Boolean): String {
+                val sender = com.akay.feature.pentest.sender.HttpSender(com.akay.feature.pentest.sender.CookieJarBridge())
+                val tx = com.akay.core.domain.model.HttpTransaction.fromRawRequest(rawRequest, sessionId = "agent", source = "manual")
+                val result = sender.send(
+                    tx,
+                    com.akay.feature.pentest.sender.HttpSender.SendOptions(
+                        includeBrowserCookies = includeCookies,
+                        followRedirects = followRedirects
+                    )
+                )
+                val final = result.final
+                if (final == null) return "Send failed: ${result.error ?: "no response"}"
+                val head = final.headerText.take(1200)
+                val body = final.bodyText.take(3500)
+                return "HTTP ${final.statusLine}\n\n" + head +
+                    (if (body.isNotBlank()) "\n\n$body" else "\n\n(empty body)")
+            }
+
+            override suspend fun encodeDecode(transform: String, direction: String, input: String): String =
+                com.akay.feature.pentest.codec.DecoderChain.transform(
+                    transform,
+                    if (direction.equals("encode", true)) com.akay.feature.pentest.codec.DecoderChain.Direction.ENCODE
+                    else com.akay.feature.pentest.codec.DecoderChain.Direction.DECODE,
+                    input
+                )
+
+            override suspend fun jwtDecode(token: String): String {
+                val info = com.akay.feature.pentest.audit.JwtDecoder.decode(token)
+                    ?: return "Not a JWT (expected header.payload.signature)."
+                return buildString {
+                    append("header:  " + (info.header?.toString() ?: "(unparseable)") + "\n")
+                    append("payload: " + (info.payload?.toString() ?: "(unparseable)") + "\n")
+                    if (info.signature != null) append("signature: present (not verified)\n")
+                    if (info.problems.isNotEmpty()) append("\n" + info.problems.joinToString("\n") { "⚠ $it" })
+                }
+            }
+
+            override suspend fun dumpStorage(): String {
+                val wv = webView ?: return "No page is currently loaded."
+                val storage = unwrapJsString(wv.evalJs(com.akay.feature.browser.agent.AgentJs.STORAGE_DUMP))
+                val cookies = getCookies()
+                return storage + "\n\ncookies:\n" + cookies
+            }
+
+            override suspend fun auditSecurityHeaders(): String {
+                val host = runCatching { java.net.URI(currentUrl()).host }.getOrNull() ?: return "No page loaded."
+                val txs = NetworkInterceptor.requests.value.filter { it.responseStatus != null }.map { req ->
+                    com.akay.core.domain.model.HttpTransaction(
+                        method = req.method, url = req.url,
+                        headers = req.requestHeaders.map { it.key to it.value },
+                        responseStatus = req.responseStatus,
+                        responseHeaders = req.responseHeaders.map { it.key to it.value },
+                        source = "capture"
+                    )
+                }.filter { runCatching { java.net.URI(it.url).host }.getOrNull() == host }
+                if (txs.isEmpty()) return "No captured responses for $host yet."
+                val audit = com.akay.feature.pentest.audit.SecurityAuditor.auditOrigin(host, txs)
+                return buildString {
+                    append("${audit.origin}: score ${audit.score}/100\n")
+                    audit.findings.forEach { append("• [${it.severity.uppercase()}] ${it.check}: ${it.detail}\n") }
+                }
+            }
+
+            override suspend fun extractJsEndpoints(maxEndpoints: Int): String {
+                val pageUrl = currentUrl()
+                if (pageUrl.isBlank()) return "No page loaded."
+                val origin = runCatching { java.net.URI(pageUrl).host }.getOrNull() ?: return "No page loaded."
+                val scripts = NetworkInterceptor.requests.value
+                    .filter { it.url.endsWith(".js") || it.url.contains(".js?") }
+                    .map { it.url }
+                    .distinct()
+                    .filter { runCatching { java.net.URI(it).host }.getOrNull() == origin }
+                if (scripts.isEmpty()) return "No same-origin .js files captured yet."
+                val endpoints = com.akay.feature.pentest.audit.EndpointExtractor.fetchAndExtract(scripts, origin)
+                if (endpoints.isEmpty()) return "No endpoints found in ${scripts.size} scripts."
+                return endpoints.take(maxEndpoints).joinToString("\n") {
+                    (if (it.isApiLike) "[api] " else "") + it.value
+                }
+            }
+
+            override suspend fun toggleIntercept(enable: Boolean): String {
+                com.akay.feature.pentest.intercept.InterceptController.setEnabled(enable)
+                return if (enable) "Intercept ON - fetch/XHR calls will be held for review."
+                else "Intercept OFF - any held requests were auto-forwarded."
+            }
+
+            override suspend fun setMatchReplace(type: String, match: String, replace: String, isRegex: Boolean): String {
+                val valid = listOf("REPLACE_REQ_HEADER", "REPLACE_REQ_BODY", "REPLACE_RESP_BODY")
+                val t = valid.firstOrNull { it.equals(type, true) } ?: return "Unknown rule type \"$type\" ($valid)."
+                com.akay.feature.pentest.intercept.InterceptController.addRule(t, match, replace, isRegex)
+                return "Rule added: $t: ${match.take(40)}"
+            }
+
+            override suspend fun sendToRepeater(urlFilter: String): String {
+                val req = NetworkInterceptor.requests.value.lastOrNull { it.url.contains(urlFilter, true) }
+                    ?: return "No captured request matching \"$urlFilter\"."
+                val tx = com.akay.core.domain.model.HttpTransaction(
+                    method = req.method, url = req.url,
+                    headers = req.requestHeaders.map { it.key to it.value },
+                    body = req.requestBody.takeIf { it.isNotBlank() }?.toByteArray(),
+                    responseStatus = req.responseStatus,
+                    responseHeaders = req.responseHeaders.map { it.key to it.value },
+                    responseBody = req.responseBody.takeIf { it.isNotBlank() }?.toByteArray(),
+                    source = "capture"
+                )
+                com.akay.feature.browser.webview.RepeaterBridge.offer(tx)
+                return "Sent to Repeater: ${tx.method} ${tx.url.take(70)}"
+            }
         }
     }
 

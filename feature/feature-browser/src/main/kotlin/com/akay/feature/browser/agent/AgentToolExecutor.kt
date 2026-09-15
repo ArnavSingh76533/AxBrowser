@@ -196,6 +196,71 @@ interface AgentToolExecutor {
      *  as an actual file rather than just showing it in chat. Overwrites a file of the same name
      *  rather than creating a duplicate. Returns where it landed. */
     suspend fun writeSavedFile(category: String?, filename: String, content: String): String
+
+    // ---------- Playwright-MCP-shaped tools (v7) ----------
+
+    /** Fresh accessibility-style snapshot of the page: compact node list with stable refs.
+     *  The model then acts by ref (browser_click/browser_type), never by writing selectors. */
+    suspend fun browserSnapshot(maxNodes: Int): String
+
+    /** Clicks the element under [ref] from the last browser_snapshot. Reports post-click state. */
+    suspend fun browserClick(ref: String): String
+
+    /** Types [text] into the element under [ref]; optionally presses Enter (submit) after. */
+    suspend fun browserType(ref: String, text: String, submit: Boolean): String
+
+    /** Batch fill: [fields] of ref -> value, one pass. Returns per-field status lines. */
+    suspend fun browserFillForm(fields: List<Triple<String, String, String>>): String
+
+    /** Selects [values] on the <select> under [ref]. */
+    suspend fun browserSelectOption(ref: String, values: List<String>): String
+
+    /** Hovers the element under [ref] (synthetic mouseover/mouseenter/mousemove). */
+    suspend fun browserHover(ref: String): String
+
+    /** Presses [key] (Enter/Tab/Escape/text) on the element under [ref] or the active element. */
+    suspend fun browserPressKey(ref: String?, key: String): String
+
+    /** Waits for [text] to appear, [textGone] to disappear, or just [timeMs] to elapse. */
+    suspend fun browserWaitFor(text: String?, textGone: String?, timeMs: Int): String
+
+    /** Answers a pending JS dialog (alert/confirm/prompt): accept/reject + prompt text. */
+    suspend fun browserHandleDialog(accept: Boolean, promptText: String?): String
+
+    /** Tab operations: list | new | close | select. */
+    suspend fun browserTabs(action: String, index: Int?): String
+
+    /** Recent console messages (log/warn/error ring buffer). */
+    suspend fun browserConsoleMessages(): String
+
+    // ---------- Pentest tools (v7): always available, any host, no gating ----------
+
+    /** Sends a raw/structured HTTP request via the raw-socket sender and returns status + headers + body. */
+    suspend fun httpSend(rawRequest: String, includeCookies: Boolean, followRedirects: Boolean): String
+
+    /** Encodes/decodes via the transform chain (url/base64/hex/html/unicode/rot13/...). */
+    suspend fun encodeDecode(transform: String, direction: String, input: String): String
+
+    /** Decodes a JWT: header/payload/signature + alg:none + expiry analysis. */
+    suspend fun jwtDecode(token: String): String
+
+    /** Dumps localStorage/sessionStorage + cookies for the current origin. */
+    suspend fun dumpStorage(): String
+
+    /** Passive security-headers/cookie scorecard for the current page's captured traffic. */
+    suspend fun auditSecurityHeaders(): String
+
+    /** LinkFinder-lite over same-origin scripts: discovered endpoint strings. */
+    suspend fun extractJsEndpoints(maxEndpoints: Int): String
+
+    /** Toggles request interception on/off. */
+    suspend fun toggleIntercept(enable: Boolean): String
+
+    /** Adds a Match&Replace rule (REPLACE_REQ_HEADER | REPLACE_REQ_BODY | REPLACE_RESP_BODY). */
+    suspend fun setMatchReplace(type: String, match: String, replace: String, isRegex: Boolean): String
+
+    /** Hands a captured request (matched by [urlFilter]) to the Repeater tab. */
+    suspend fun sendToRepeater(urlFilter: String): String
 }
 
 data class AgentLink(val text: String, val href: String)
