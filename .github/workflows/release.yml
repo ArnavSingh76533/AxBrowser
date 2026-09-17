@@ -112,7 +112,7 @@ jobs:
 
         NOW=$(date -u '+%d %b %Y %H:%M')
         ELAPSED=$(( $(date +%s) - ${JOB_START:-$(date +%s)} ))
-        SUBJECT=$(printf '%s' "$COMMIT_MSG" | head -n1 | cut -c1-160)
+        SUBJECT=$(printf '%s' "${COMMIT_MSG:-release build}" | head -n1 | cut -c1-160)
         APK="AxBrowser-v${VERSION}.apk"
         AAB=$(find app/build/outputs/bundle/release -name "*.aab" | head -1)
 

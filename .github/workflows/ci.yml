@@ -5,6 +5,10 @@ on:
     branches: [ main, develop ]
   pull_request:
     branches: [ main, develop ]
+  # Manual re-run: lets you re-test the Telegram upload (after changing the Telegram
+  # secrets, say) without pushing a commit. Only main re-runs publish/report - the
+  # Telegram step below accepts workflow_dispatch on main.
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -104,7 +108,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Send APK to Telegram (whole file, MTProto)
-      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
       # Uploads the ACTUAL APK, not a link. The HTTP Bot API (api.telegram.org) hard-caps
       # sendDocument at 50MB, which this ~120MB debug APK always exceeds, so the upload goes
       # over MTProto via Telethon (scripts/telegram_upload.py) where the same bot can send up
@@ -146,7 +150,7 @@ jobs:
         ELAPSED=$(( $(date +%s) - ${JOB_START:-$(date +%s)} ))
         # Only the first line of the commit message, so a multi-paragraph body can't push the
         # caption over Telegram's 1024-unit cap (the script trims as a final safety net).
-        SUBJECT=$(printf '%s' "$COMMIT_MSG" | head -n1 | cut -c1-160)
+        SUBJECT=$(printf '%s' "${COMMIT_MSG:-manual run}" | head -n1 | cut -c1-160)
 
         # Written to a file rather than passed as an argument/env value: the caption is
         # multi-line and may contain quotes, % or $( ) from the commit subject.
