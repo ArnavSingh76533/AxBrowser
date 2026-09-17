@@ -85,6 +85,15 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+    - name: Restore Telegram MTProto session
+      # Same optional session cache as the nightly CI job: the first successful upload
+      # creates the session, later builds reuse it instead of signing the bot in again.
+      continue-on-error: true
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/ax-telegram.session
+        key: ax-telegram-session-v1
+
     - name: Send release files to Telegram (whole files, MTProto)
       # Same MTProto uploader as the nightly CI job: the Bot API caps sendDocument at 50MB,
       # which a release APK/AAB exceeds, so Telethon uploads the real files (up to 2GB).
@@ -92,7 +101,7 @@ jobs:
       continue-on-error: true
       env:
         TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID || '22138159' }}
-        TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+        TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH || '3fe4592e4cad72f366b6c564505f' }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         TELEGRAM_SESSION_STRING: ${{ secrets.TELEGRAM_SESSION_STRING }}
@@ -136,6 +145,7 @@ jobs:
         python3 scripts/telegram_upload.py \
           --file "$APK" \
           --caption-file "$CAPTION_FILE" \
+          --session-file "${RUNNER_TEMP}/ax-telegram.session" \
           --fallback-url "https://github.com/${REPO}/releases/tag/v${VERSION}"
 
         # The .aab is the Play Store artifact; sent as a second document when present.
@@ -149,5 +159,6 @@ jobs:
           python3 scripts/telegram_upload.py \
             --file "$AAB" \
             --caption-file "$AAB_CAPTION" \
+            --session-file "${RUNNER_TEMP}/ax-telegram.session" \
             --fallback-url "https://github.com/${REPO}/releases/tag/v${VERSION}" || true
         fi

@@ -1,0 +1,110 @@
+name: Telegram check
+
+# Fast manual check for the Telegram upload - no Android build, so it finishes in about a
+# minute. Run it from Actions -> "Telegram check" -> Run workflow whenever the nightly
+# upload reports a problem; the log says exactly which credential is missing or what
+# Telegram refused.
+#
+#   mode=doctor  : sign in, resolve the chat, optionally send a short test message,
+#                  and save the MTProto session as an artifact.
+#   mode=session : only create/refresh the session string and print it as an artifact,
+#                  so it can be pasted into the TELEGRAM_SESSION_STRING secret.
+#
+# The bot login (api_id + api_hash + bot token) needs no phone number, login code or
+# session string - the session is just an optimisation so the bot is not signed in again
+# on every build.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'What to do'
+        required: true
+        default: doctor
+        type: choice
+        options:
+          - doctor
+          - session
+
+permissions:
+  contents: read
+
+jobs:
+  telegram:
+    name: Telegram MTProto check
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Restore saved MTProto session
+      continue-on-error: true
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/ax-telegram.session
+        key: ax-telegram-session-v1
+
+    - name: Install Telethon
+      run: python3 -m pip install --quiet --disable-pip-version-check "telethon>=1.36"
+
+    - name: Report which credentials are configured
+      # Names only, never values: this is the "incomplete credentials" question answered.
+      env:
+        TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID || '22138159' }}
+        TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH || '3fe4592e4cad72f366b6c564505f' }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        TELEGRAM_SESSION_STRING: ${{ secrets.TELEGRAM_SESSION_STRING }}
+      run: |
+        show() {
+          if [ -n "$2" ]; then
+            echo "- $1: set (${#2} characters)"
+          else
+            echo "- $1: **missing**"
+          fi
+        }
+        {
+          echo "### Telegram configuration"
+          show TELEGRAM_API_ID "$TELEGRAM_API_ID"
+          show TELEGRAM_API_HASH "$TELEGRAM_API_HASH"
+          show TELEGRAM_BOT_TOKEN "$TELEGRAM_BOT_TOKEN"
+          show TELEGRAM_CHAT_ID "$TELEGRAM_CHAT_ID"
+          show TELEGRAM_SESSION_STRING "$TELEGRAM_SESSION_STRING"
+        } | tee -a "$GITHUB_STEP_SUMMARY"
+
+    - name: Login + chat check (doctor)
+      if: inputs.mode == 'doctor'
+      env:
+        TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID || '22138159' }}
+        TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH || '3fe4592e4cad72f366b6c564505f' }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        TELEGRAM_SESSION_STRING: ${{ secrets.TELEGRAM_SESSION_STRING }}
+      run: |
+        python3 scripts/telegram_upload.py --check --send-test \
+          --session-file "${RUNNER_TEMP}/ax-telegram.session"
+
+    - name: Create session only
+      if: inputs.mode == 'session'
+      env:
+        TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID || '22138159' }}
+        TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH || '3fe4592e4cad72f366b6c564505f' }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      run: |
+        python3 scripts/telegram_upload.py --make-session --session-out telegram.session.txt
+
+    - name: Upload session artifact
+      if: always()
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: telegram-session
+        # Both paths are optional: whichever exists is uploaded. Delete the artifact after
+        # copying the value into the TELEGRAM_SESSION_STRING secret.
+        path: |
+          ${{ runner.temp }}/ax-telegram.session
+          telegram.session.txt
+        if-no-files-found: ignore
+        retention-days: 1

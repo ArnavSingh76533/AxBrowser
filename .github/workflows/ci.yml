@@ -107,20 +107,33 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+    - name: Restore Telegram MTProto session
+      # Optional: the bot login (api_id + api_hash + bot token) works with no saved
+      # session, but Telegram rate-limits repeated sign-ins and every CI run comes from a
+      # fresh IP, so the session created by the first successful upload is cached here and
+      # reused from then on. Nothing here is required for the upload to work.
+      continue-on-error: true
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/ax-telegram.session
+        key: ax-telegram-session-v1
+
     - name: Send APK to Telegram (whole file, MTProto)
       if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
       # Uploads the ACTUAL APK, not a link. The HTTP Bot API (api.telegram.org) hard-caps
       # sendDocument at 50MB, which this ~120MB debug APK always exceeds, so the upload goes
       # over MTProto via Telethon (scripts/telegram_upload.py) where the same bot can send up
-      # to 2GB. Credentials come from repo secrets; if they are missing or MTProto is refused
-      # the script degrades to the Bot API and finally to an info message with the release
-      # link, so a Telegram hiccup can never fail the build (continue-on-error below).
+      # to 2GB. The api_id/api_hash defaults below are the app the bot was created under; a
+      # TELEGRAM_API_HASH secret overrides the baked-in one, and the bot token + chat id are
+      # secrets only. If MTProto is refused the script degrades to the Bot API and finally to
+      # an info message with the release link, so a Telegram hiccup can never fail the build
+      # (continue-on-error below).
       # Captions are capped by Telegram at 1024 UTF-16 units (4096 for plain messages); the
       # script trims to fit instead of letting the API reject the upload.
       continue-on-error: true
       env:
         TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID || '22138159' }}
-        TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+        TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH || '3fe4592e4cad72f366b6c564505f' }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         TELEGRAM_SESSION_STRING: ${{ secrets.TELEGRAM_SESSION_STRING }}
@@ -164,6 +177,7 @@ jobs:
         python3 scripts/telegram_upload.py \
           --file "$APK" \
           --caption-file "$CAPTION_FILE" \
+          --session-file "${RUNNER_TEMP}/ax-telegram.session" \
           --fallback-url "$DOWNLOAD_URL"
 
     - name: Upload Test Results

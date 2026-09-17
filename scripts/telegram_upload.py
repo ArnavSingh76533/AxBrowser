@@ -12,14 +12,20 @@ where the same bot can upload files up to 2 GB (4 GB with Premium), and it logs 
 with nothing more than the api_id / api_hash from https://my.telegram.org/apps plus
 the bot token from @BotFather.
 
-Credentials (read from the environment)
----------------------------------------
-TELEGRAM_API_ID          app id   (https://my.telegram.org/apps)      required for MTProto
-TELEGRAM_API_HASH        app hash (https://my.telegram.org/apps)      required for MTProto
-TELEGRAM_BOT_TOKEN       token from @BotFather                        required
-TELEGRAM_CHAT_ID         numeric id (-100...) or @username of the chat
-TELEGRAM_SESSION_STRING  optional StringSession; makes the login reusable and skips
-                         a fresh importBotAuthorization on every build
+Credentials (read from the environment; the first name wins, the aliases let the
+same script run from GitHub Actions secrets, .env files or a hand-run shell)
+------------------------------------------------------------------------------
+TELEGRAM_API_ID / BOT_API_ID            app id   (https://my.telegram.org/apps)
+TELEGRAM_API_HASH / BOT_API_HASH        app hash (https://my.telegram.org/apps)
+TELEGRAM_BOT_TOKEN / BOT_TOKEN          token from @BotFather
+TELEGRAM_CHAT_ID / CHAT_ID              numeric id (-100...) or @username
+TELEGRAM_SESSION_STRING                 optional StringSession; preferred over the
+                                        session file and skips a fresh
+                                        importBotAuthorization on every build
+--session-file PATH                     StringSession file: read when it exists and
+                                        written after a fresh bot login, so the
+                                        login only happens once and later builds
+                                        reuse the saved session
 
 Character limits (Telegram counts UTF-16 code units, so one emoji = 2):
   - document caption : 1024  -> --caption-file is truncated, never rejected
@@ -32,7 +38,10 @@ Usage
   python scripts/telegram_upload.py --file app.apk --caption-file /tmp/caption.txt
   python scripts/telegram_upload.py --file app.apk --caption-file c.txt \
       --fallback-url https://github.com/owner/repo/releases/download/nightly/app.apk
+  python scripts/telegram_upload.py --file app.apk --caption-file c.txt \
+      --session-file /tmp/telegram.session
   python scripts/telegram_upload.py --make-session --session-out session.txt
+  python scripts/telegram_upload.py --check --send-test   # doctor: login + test message
   python scripts/telegram_upload.py --file app.apk --caption-file c.txt --dry-run
 
 Exit codes: 0 = uploaded (or a documented fallback delivered it), 2 = nothing sent.
@@ -109,6 +118,15 @@ def guess_mime(path: Path) -> str:
     return mimetypes.guess_type(path.name)[0] or "application/octet-stream"
 
 
+def env(*names: str) -> str:
+    """First non-empty environment variable among `names`."""
+    for name in names:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
 def parse_chat(raw: str):
     """Telethon takes a real int for numeric ids, a username string otherwise."""
     raw = raw.strip()
@@ -129,6 +147,59 @@ def read_caption(args: argparse.Namespace) -> str:
 # MTProto (Telethon)
 # --------------------------------------------------------------------------------------
 
+def save_session(args: argparse.Namespace, client) -> None:
+    """Persist a freshly created session so the next build skips the bot login."""
+    if not getattr(args, "session_file", None):
+        return
+    try:
+        Path(args.session_file).write_text(client.session.save(), encoding="utf-8")
+        log(f"MTProto session created and saved to {args.session_file}")
+    except Exception as exc:  # noqa: BLE001 - a missing session is not worth failing a build
+        warn(f"Could not save the MTProto session to {args.session_file}: {exc}")
+
+
+async def mtproto_login(client, cfg: dict):
+    """Sign in with the saved session when there is one, else as the bot."""
+    if cfg["session"]:
+        await client.connect()
+        if not await client.is_user_authorized():
+            raise RuntimeError(
+                "the saved Telegram session is not authorised (revoked, or created for "
+                "another api_id)"
+            )
+        return False
+    # importBotAuthorization - no phone number or login code needed.
+    await client.start(bot_token=cfg["bot_token"])
+    return True
+
+
+async def mtproto_check(args: argparse.Namespace, cfg: dict) -> None:
+    """Doctor mode: prove the credentials work and show where the file would go."""
+    from telethon import TelegramClient
+    from telethon.sessions import StringSession
+
+    session = StringSession(cfg["session"]) if cfg["session"] else StringSession()
+    client = TelegramClient(session, int(cfg["api_id"]), cfg["api_hash"])
+    client.parse_mode = None
+    try:
+        fresh = await mtproto_login(client, cfg)
+        me = await client.get_me()
+        log(f"MTProto login OK: id={me.id} username=@{getattr(me, 'username', None)} bot={me.bot}")
+        if fresh:
+            save_session(args, client)
+        entity = await client.get_entity(parse_chat(cfg["chat"]))
+        log(
+            f"Chat OK: {type(entity).__name__} id={getattr(entity, 'id', None)} "
+            f"title={getattr(entity, 'title', None)!r}"
+        )
+        if args.send_test:
+            await client.send_message(entity, "AxBrowser Telegram check: MTProto login works.")
+            log("Test message sent.")
+        log("Doctor: everything needed for the APK upload works.")
+    finally:
+        await client.disconnect()
+
+
 async def mtproto_send(args: argparse.Namespace, cfg: dict) -> None:
     from telethon import TelegramClient
     from telethon.sessions import StringSession
@@ -136,19 +207,13 @@ async def mtproto_send(args: argparse.Namespace, cfg: dict) -> None:
     from telethon.errors import FloodWaitError
 
     session = StringSession(cfg["session"]) if cfg["session"] else StringSession()
-    client = TelegramClient(session, cfg["api_id"], cfg["api_hash"])
+    client = TelegramClient(session, int(cfg["api_id"]), cfg["api_hash"])
     client.parse_mode = None  # keep the caption exactly as written
 
     try:
-        if cfg["session"]:
-            await client.connect()
-            if not await client.is_user_authorized():
-                raise RuntimeError(
-                    "TELEGRAM_SESSION_STRING is not authorised (revoked or for another app id)"
-                )
-        else:
-            # importBotAuthorization - no phone number or login code needed.
-            await client.start(bot_token=cfg["bot_token"])
+        fresh = await mtproto_login(client, cfg)
+        if fresh:
+            save_session(args, client)
 
         me = await client.get_me()
         log(f"MTProto: signed in as @{getattr(me, 'username', None) or me.id}")
@@ -193,7 +258,9 @@ async def make_session(args: argparse.Namespace, cfg: dict) -> None:
     from telethon import TelegramClient
     from telethon.sessions import StringSession
 
-    client = TelegramClient(StringSession(), cfg["api_id"], cfg["api_hash"])
+    if not cfg["api_id"].isdigit():
+        raise SystemExit(f"api id must be a number, got {cfg['api_id']!r}")
+    client = TelegramClient(StringSession(), int(cfg["api_id"]), cfg["api_hash"])
     try:
         if args.login_user:
             if not sys.stdin.isatty():
@@ -289,29 +356,44 @@ def bot_api_fallback(cfg: dict, path: Path, caption: str, fallback_url: str | No
 
 # --------------------------------------------------------------------------------------
 
-def load_config(require_mtproto: bool) -> dict:
-    cfg = {
-        "api_id": os.environ.get("TELEGRAM_API_ID", "").strip(),
-        "api_hash": os.environ.get("TELEGRAM_API_HASH", "").strip(),
-        "bot_token": os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(),
-        "chat": os.environ.get("TELEGRAM_CHAT_ID", "").strip(),
-        "session": os.environ.get("TELEGRAM_SESSION_STRING", "").strip(),
+# Telegram api_hash values are 32 hex characters. A shorter one means the value was
+# cut short somewhere (a copy/paste, or a message line that wrapped), and ANY length
+# mismatch makes MTProto reject the login - so say that out loud instead of letting it
+# fail silently into the Bot API fallback.
+API_HASH_LEN = 32
+
+
+def load_config() -> dict:
+    return {
+        "api_id": env("TELEGRAM_API_ID", "BOT_API_ID", "AX_TELEGRAM_API_ID"),
+        "api_hash": env("TELEGRAM_API_HASH", "BOT_API_HASH", "AX_TELEGRAM_API_HASH"),
+        "bot_token": env("TELEGRAM_BOT_TOKEN", "BOT_TOKEN", "TELEGRAM_TOKEN", "BOT_API_TOKEN"),
+        "chat": env("TELEGRAM_CHAT_ID", "BOT_CHAT_ID", "CHAT_ID", "TELEGRAM_CHANNEL_ID"),
+        "session": env("TELEGRAM_SESSION_STRING", "BOT_SESSION_STRING"),
     }
-    if require_mtproto:
-        missing = [k for k in ("api_id", "api_hash", "bot_token", "chat") if not cfg[k]]
-        if missing:
-            raise SystemExit(
-                "Missing Telegram configuration: "
-                + ", ".join("TELEGRAM_" + m.upper() for m in missing)
-                + "\nAdd them in Settings -> Secrets and variables -> Actions "
-                "(TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)."
-            )
-        if not cfg["api_hash"].replace(" ", "").isalnum() or len(cfg["api_hash"]) != 32:
-            warn(
-                "TELEGRAM_API_HASH does not look like a 32-character api hash; "
-                "copy it in full from https://my.telegram.org/apps"
-            )
-    return cfg
+
+
+def check_hash(cfg: dict) -> None:
+    """Warn (with the actual length) when the api_hash cannot possibly be right."""
+    value, length = cfg["api_hash"], len(cfg["api_hash"])
+    if length and length != API_HASH_LEN:
+        warn(
+            f"api hash is {length} characters, but Telegram api_hash values are always "
+            f"{API_HASH_LEN} - the value is incomplete and MTProto login will be refused. "
+            "Copy it in full from https://my.telegram.org/apps."
+        )
+    elif length and not all(c in "0123456789abcdefABCDEF" for c in value):
+        warn("api hash is not hexadecimal - check for a stray character.")
+
+
+def missing_pieces(cfg: dict) -> list[str]:
+    names = {
+        "api_id": "TELEGRAM_API_ID / BOT_API_ID",
+        "api_hash": "TELEGRAM_API_HASH / BOT_API_HASH",
+        "bot_token": "TELEGRAM_BOT_TOKEN / BOT_TOKEN",
+        "chat": "TELEGRAM_CHAT_ID / CHAT_ID",
+    }
+    return [label for key, label in names.items() if not cfg[key]]
 
 
 def main() -> int:
@@ -323,17 +405,48 @@ def main() -> int:
     parser.add_argument("--make-session", action="store_true", help="print/store a StringSession and exit")
     parser.add_argument("--login-user", action="store_true", help="with --make-session: log in as a user (interactive)")
     parser.add_argument("--session-out", help="with --make-session: write the session string to this file")
+    parser.add_argument(
+        "--session-file",
+        help="StringSession file: reused when present, written after a fresh bot login",
+    )
+    parser.add_argument("--check", action="store_true", help="doctor: verify login + chat and exit")
+    parser.add_argument("--send-test", action="store_true", help="with --check: send a short test message")
     parser.add_argument("--dry-run", action="store_true", help="validate caption/limits and print what would be sent")
     args = parser.parse_args()
 
+    cfg = load_config()
+    check_hash(cfg)
+
+    # A saved session (secret first, then file) removes the per-build bot login.
+    if not cfg["session"] and args.session_file and Path(args.session_file).is_file():
+        saved = Path(args.session_file).read_text(encoding="utf-8").strip()
+        if saved:
+            cfg["session"] = saved
+            log(f"Reusing the MTProto session saved in {args.session_file}")
+
     if args.make_session:
-        cfg = load_config(require_mtproto=False)
         if not cfg["api_id"] or not cfg["api_hash"]:
-            raise SystemExit("--make-session needs TELEGRAM_API_ID and TELEGRAM_API_HASH")
+            raise SystemExit("--make-session needs an api id and api hash")
         if not args.login_user and not cfg["bot_token"]:
-            raise SystemExit("--make-session needs TELEGRAM_BOT_TOKEN (or --login-user)")
+            raise SystemExit("--make-session needs a bot token (or --login-user)")
         asyncio.run(make_session(args, cfg))
         return 0
+
+    if args.check:
+        missing = missing_pieces(cfg)
+        if missing:
+            for label in missing:
+                print(f"::error::Missing Telegram configuration: {label}", flush=True)
+            return 3
+        try:
+            asyncio.run(mtproto_check(args, cfg))
+            return 0
+        except ImportError:
+            print("::error::Telethon is not installed (pip install telethon)", flush=True)
+            return 3
+        except Exception as exc:  # noqa: BLE001 - doctor mode reports the real reason
+            print(f"::error::MTProto check failed: {type(exc).__name__}: {exc}", flush=True)
+            return 3
 
     if not args.file:
         raise SystemExit("--file is required")
@@ -341,7 +454,6 @@ def main() -> int:
     if not path.is_file():
         raise SystemExit(f"File not found: {path}")
 
-    cfg = load_config(require_mtproto=False)
     cfg["caption"] = read_caption(args)
     size = path.stat().st_size
     truncated = utf16_len(cfg["caption"]) > CAPTION_LIMIT
@@ -359,15 +471,19 @@ def main() -> int:
     log(cfg["caption"])
     log("=" * 70)
 
+    missing = missing_pieces(cfg)
+
     if args.dry_run:
+        for label in missing:
+            warn(f"Not configured: {label} - the upload would fall back to the Bot API")
         log("Dry run: nothing sent.")
         return 0
 
-    mtproto_ready = bool(cfg["api_id"] and cfg["api_hash"] and cfg["bot_token"] and cfg["chat"])
+    mtproto_ready = not missing
     if mtproto_ready:
         try:
             if not cfg["session"]:
-                log("No TELEGRAM_SESSION_STRING set - logging in as the bot for this run.")
+                log("No saved MTProto session yet - logging in as the bot for this run.")
             asyncio.run(mtproto_send(args, cfg))
             if truncated and cfg["bot_token"] and cfg["chat"]:
                 bot_api_call(
@@ -382,6 +498,8 @@ def main() -> int:
             warn(f"MTProto upload failed: {type(exc).__name__}: {exc}")
     else:
         warn("MTProto credentials are incomplete - falling back to the Bot API")
+        for label in missing:
+            warn(f"  missing: {label}")
 
     if cfg["bot_token"] and cfg["chat"]:
         if bot_api_fallback(cfg, path, cfg["caption"], args.fallback_url):
