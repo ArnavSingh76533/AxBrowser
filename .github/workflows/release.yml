@@ -17,6 +17,10 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
+    - name: Mark job start
+      id: t0
+      run: echo "T0=$(date +%s)" >> "$GITHUB_OUTPUT"
+
     - name: Set up JDK 17
       uses: actions/setup-java@v4
       with:
@@ -80,3 +84,70 @@ jobs:
           app/build/outputs/bundle/release/*.aab
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Send release files to Telegram (whole files, MTProto)
+      # Same MTProto uploader as the nightly CI job: the Bot API caps sendDocument at 50MB,
+      # which a release APK/AAB exceeds, so Telethon uploads the real files (up to 2GB).
+      # Non-blocking - a Telegram problem must never invalidate a published release.
+      continue-on-error: true
+      env:
+        TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID || '22138159' }}
+        TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        TELEGRAM_SESSION_STRING: ${{ secrets.TELEGRAM_SESSION_STRING }}
+        VERSION: ${{ steps.version.outputs.VERSION }}
+        VERSION_CODE: ${{ steps.version.outputs.VERSION_CODE }}
+        REPO: ${{ github.repository }}
+        SHA: ${{ github.sha }}
+        RUN_ID: ${{ github.run_id }}
+        JOB_START: ${{ steps.t0.outputs.T0 }}
+        COMMIT_MSG: ${{ github.event.head_commit.message }}
+      run: |
+        if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+          echo "Telegram secrets not set, skipping."
+          exit 0
+        fi
+        python3 -m pip install --quiet --disable-pip-version-check "telethon>=1.36"
+
+        NOW=$(date -u '+%d %b %Y %H:%M')
+        ELAPSED=$(( $(date +%s) - ${JOB_START:-$(date +%s)} ))
+        SUBJECT=$(printf '%s' "$COMMIT_MSG" | head -n1 | cut -c1-160)
+        APK="AxBrowser-v${VERSION}.apk"
+        AAB=$(find app/build/outputs/bundle/release -name "*.aab" | head -1)
+
+        if [ ! -f "$APK" ]; then
+          echo "Release APK not found at $APK, skipping Telegram upload."
+          exit 0
+        fi
+
+        BYTES=$(stat -c%s "$APK")
+        MB=$(awk -v b="$BYTES" 'BEGIN { printf "%.1f", b / 1048576 }')
+        SHA256=$(sha256sum "$APK" | cut -d' ' -f1)
+
+        CAPTION_FILE="${RUNNER_TEMP}/telegram-release-caption.txt"
+        printf '🎉 AxBrowser v%s (release)\n\n📦 %s · %s MB · %s bytes\n🔐 SHA-256 %s\n🔖 versionName %s · versionCode %s · tag v%s\n🌿 %s @ %s\n🕒 %s UTC · CI took %dm %ds\n📝 %s\n🧾 commit: https://github.com/%s/commit/%s\n⚙️ run: https://github.com/%s/actions/runs/%s\n⬇️ https://github.com/%s/releases/tag/v%s' \
+          "$VERSION" "$APK" "$MB" "$BYTES" "$SHA256" \
+          "$VERSION" "$VERSION_CODE" "$VERSION" "${GITHUB_REF_NAME}" "${SHA:0:7}" \
+          "$NOW" "$((ELAPSED / 60))" "$((ELAPSED % 60))" \
+          "$SUBJECT" "$REPO" "$SHA" "$REPO" "$RUN_ID" "$REPO" "$VERSION" \
+          > "$CAPTION_FILE"
+
+        python3 scripts/telegram_upload.py \
+          --file "$APK" \
+          --caption-file "$CAPTION_FILE" \
+          --fallback-url "https://github.com/${REPO}/releases/tag/v${VERSION}"
+
+        # The .aab is the Play Store artifact; sent as a second document when present.
+        if [ -n "$AAB" ]; then
+          AAB_CAPTION="${RUNNER_TEMP}/telegram-release-aab-caption.txt"
+          AAB_MB=$(awk -v b="$(stat -c%s "$AAB")" 'BEGIN { printf "%.1f", b / 1048576 }')
+          printf '🧩 AxBrowser v%s — Play Store bundle (.aab)\n📦 %s · %s MB\n🔖 versionCode %s\n🧾 commit: https://github.com/%s/commit/%s' \
+            "$VERSION" "$(basename "$AAB")" "$AAB_MB" \
+            "$VERSION_CODE" "$REPO" "$SHA" \
+            > "$AAB_CAPTION"
+          python3 scripts/telegram_upload.py \
+            --file "$AAB" \
+            --caption-file "$AAB_CAPTION" \
+            --fallback-url "https://github.com/${REPO}/releases/tag/v${VERSION}" || true
+        fi

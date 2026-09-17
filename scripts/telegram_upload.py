@@ -1,0 +1,397 @@
+#!/usr/bin/env python3
+"""
+Upload a build artifact (APK / AAB / zip) to a Telegram chat, together with the full
+build information, using MTProto instead of the HTTP Bot API.
+
+Why MTProto
+-----------
+https://api.telegram.org/bot<token>/sendDocument hard-caps uploads at 50 MB (and
+getFile downloads at 20 MB), so the ~120 MB AxBrowser APK can never be sent that way -
+it is rejected with 413 Request Entity Too Large. Telethon speaks MTProto directly,
+where the same bot can upload files up to 2 GB (4 GB with Premium), and it logs in
+with nothing more than the api_id / api_hash from https://my.telegram.org/apps plus
+the bot token from @BotFather.
+
+Credentials (read from the environment)
+---------------------------------------
+TELEGRAM_API_ID          app id   (https://my.telegram.org/apps)      required for MTProto
+TELEGRAM_API_HASH        app hash (https://my.telegram.org/apps)      required for MTProto
+TELEGRAM_BOT_TOKEN       token from @BotFather                        required
+TELEGRAM_CHAT_ID         numeric id (-100...) or @username of the chat
+TELEGRAM_SESSION_STRING  optional StringSession; makes the login reusable and skips
+                         a fresh importBotAuthorization on every build
+
+Character limits (Telegram counts UTF-16 code units, so one emoji = 2):
+  - document caption : 1024  -> --caption-file is truncated, never rejected
+  - message text     : 4096
+When the caption had to be truncated, the untouched text is sent as a follow-up
+message so nothing is silently lost.
+
+Usage
+-----
+  python scripts/telegram_upload.py --file app.apk --caption-file /tmp/caption.txt
+  python scripts/telegram_upload.py --file app.apk --caption-file c.txt \
+      --fallback-url https://github.com/owner/repo/releases/download/nightly/app.apk
+  python scripts/telegram_upload.py --make-session --session-out session.txt
+  python scripts/telegram_upload.py --file app.apk --caption-file c.txt --dry-run
+
+Exit codes: 0 = uploaded (or a documented fallback delivered it), 2 = nothing sent.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import hashlib
+import mimetypes
+import os
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+from pathlib import Path
+
+CAPTION_LIMIT = 1024  # Telegram document caption
+MESSAGE_LIMIT = 4096  # Telegram message text
+BOT_API_DOC_LIMIT = 50 * 1024 * 1024  # Bot API sendDocument ceiling
+APK_MIME = "application/vnd.android.package-archive"
+
+TRUNCATED_MARK = "\n… (truncated)"
+
+
+def log(msg: str) -> None:
+    print(msg, flush=True)
+
+
+def warn(msg: str) -> None:
+    print(f"::warning::{msg}", flush=True)
+
+
+def utf16_len(text: str) -> int:
+    """Telegram measures captions in UTF-16 code units, not Python characters."""
+    return len(text.encode("utf-16-le")) // 2
+
+
+def truncate(text: str, limit: int) -> str:
+    """Cut `text` to at most `limit` UTF-16 code units, keeping a visible marker."""
+    if utf16_len(text) <= limit:
+        return text
+    budget = limit - utf16_len(TRUNCATED_MARK)
+    out: list[str] = []
+    used = 0
+    for ch in text:
+        size = utf16_len(ch)
+        if used + size > budget:
+            break
+        out.append(ch)
+        used += size
+    return "".join(out) + TRUNCATED_MARK
+
+
+def human_bytes(n: int) -> str:
+    mb = n / (1024 * 1024)
+    return f"{mb / 1024:.2f} GB" if mb >= 1024 else f"{mb:.2f} MB"
+
+
+def sha256_of(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def guess_mime(path: Path) -> str:
+    if path.suffix.lower() == ".apk":
+        return APK_MIME
+    return mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+
+
+def parse_chat(raw: str):
+    """Telethon takes a real int for numeric ids, a username string otherwise."""
+    raw = raw.strip()
+    if raw.lstrip("-").isdigit():
+        return int(raw)
+    return raw
+
+
+def read_caption(args: argparse.Namespace) -> str:
+    if args.caption_file:
+        return Path(args.caption_file).read_text(encoding="utf-8").rstrip()
+    if args.caption:
+        return args.caption
+    return ""
+
+
+# --------------------------------------------------------------------------------------
+# MTProto (Telethon)
+# --------------------------------------------------------------------------------------
+
+async def mtproto_send(args: argparse.Namespace, cfg: dict) -> None:
+    from telethon import TelegramClient
+    from telethon.sessions import StringSession
+    from telethon.tl.types import DocumentAttributeFilename
+    from telethon.errors import FloodWaitError
+
+    session = StringSession(cfg["session"]) if cfg["session"] else StringSession()
+    client = TelegramClient(session, cfg["api_id"], cfg["api_hash"])
+    client.parse_mode = None  # keep the caption exactly as written
+
+    try:
+        if cfg["session"]:
+            await client.connect()
+            if not await client.is_user_authorized():
+                raise RuntimeError(
+                    "TELEGRAM_SESSION_STRING is not authorised (revoked or for another app id)"
+                )
+        else:
+            # importBotAuthorization - no phone number or login code needed.
+            await client.start(bot_token=cfg["bot_token"])
+
+        me = await client.get_me()
+        log(f"MTProto: signed in as @{getattr(me, 'username', None) or me.id}")
+
+        entity = await client.get_entity(parse_chat(cfg["chat"]))
+        path = Path(args.file)
+        total = path.stat().st_size
+        state = {"pct": -1, "t0": time.time()}
+
+        def progress(sent: int, expected: int) -> None:
+            pct = int(sent * 100 / expected) if expected else 0
+            if pct >= state["pct"] + 10 or pct == 100:
+                state["pct"] = pct
+                log(
+                    f"  uploading {pct:3d}%  {human_bytes(sent)} / {human_bytes(expected)}"
+                    f"  ({time.time() - state['t0']:.0f}s)"
+                )
+
+        for attempt in range(1, 4):
+            try:
+                log(f"MTProto: uploading {path.name} ({human_bytes(total)}) as a document")
+                await client.send_file(
+                    entity,
+                    str(path),
+                    caption=cfg["caption"],
+                    force_document=True,
+                    attributes=[DocumentAttributeFilename(path.name)],
+                    progress_callback=progress,
+                )
+                break
+            except FloodWaitError as exc:
+                if attempt == 3:
+                    raise
+                warn(f"Telegram flood wait {exc.seconds}s, retrying ({attempt}/3)")
+                await asyncio.sleep(exc.seconds + 2)
+        log(f"MTProto: sent {path.name} ({human_bytes(total)}) in {time.time() - state['t0']:.0f}s")
+    finally:
+        await client.disconnect()
+
+
+async def make_session(args: argparse.Namespace, cfg: dict) -> None:
+    from telethon import TelegramClient
+    from telethon.sessions import StringSession
+
+    client = TelegramClient(StringSession(), cfg["api_id"], cfg["api_hash"])
+    try:
+        if args.login_user:
+            if not sys.stdin.isatty():
+                raise SystemExit(
+                    "--login-user needs an interactive terminal (phone + login code); "
+                    "run it on your own machine, not in CI."
+                )
+            await client.start()
+        else:
+            await client.start(bot_token=cfg["bot_token"])
+        me = await client.get_me()
+        value = client.session.save()
+        log(f"Signed in as @{getattr(me, 'username', None) or me.id} (bot={me.bot})")
+        if args.session_out:
+            Path(args.session_out).write_text(value, encoding="utf-8")
+            log(f"Session string written to {args.session_out}")
+        else:
+            log("Session string (store it as the TELEGRAM_SESSION_STRING secret):")
+            log(value)
+    finally:
+        await client.disconnect()
+
+
+# --------------------------------------------------------------------------------------
+# Bot API (HTTP) fallback - only useful below 50 MB
+# --------------------------------------------------------------------------------------
+
+def _multipart(fields: dict, files: dict) -> tuple[bytes, str]:
+    boundary = uuid.uuid4().hex
+    body = bytearray()
+    for name, value in fields.items():
+        body += f"--{boundary}\r\n".encode()
+        body += f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode()
+        body += f"{value}\r\n".encode()
+    for name, (filename, payload, mime) in files.items():
+        body += f"--{boundary}\r\n".encode()
+        body += (
+            f'Content-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'
+            f"Content-Type: {mime}\r\n\r\n"
+        ).encode()
+        body += payload + b"\r\n"
+    body += f"--{boundary}--\r\n".encode()
+    return bytes(body), f"multipart/form-data; boundary={boundary}"
+
+
+def bot_api_call(token: str, method: str, fields: dict, files: dict | None = None) -> str:
+    if files:
+        payload, content_type = _multipart(fields, files)
+    else:
+        payload = urllib.parse.urlencode(fields).encode()
+        content_type = "application/x-www-form-urlencoded"
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/{method}",
+        data=payload,
+        headers={"Content-Type": content_type},
+    )
+    with urllib.request.urlopen(req, timeout=180) as resp:
+        return resp.read().decode("utf-8", "replace")
+
+
+def bot_api_fallback(cfg: dict, path: Path, caption: str, fallback_url: str | None) -> bool:
+    size = path.stat().st_size
+    if size <= BOT_API_DOC_LIMIT:
+        log(f"Bot API: sending {path.name} as a document ({human_bytes(size)})")
+        try:
+            log(bot_api_call(
+                cfg["bot_token"],
+                "sendDocument",
+                {"chat_id": cfg["chat"], "caption": caption},
+                {"document": (path.name, path.read_bytes(), guess_mime(path))},
+            )[:400])
+            return True
+        except urllib.error.HTTPError as exc:
+            warn(f"Bot API sendDocument failed: {exc.code} {exc.read()[:200]!r}")
+        except Exception as exc:  # noqa: BLE001 - reported, then we try the text path
+            warn(f"Bot API sendDocument failed: {exc}")
+    else:
+        warn(
+            f"Bot API cannot carry {human_bytes(size)} "
+            f"(sendDocument limit is {human_bytes(BOT_API_DOC_LIMIT)})."
+        )
+
+    if fallback_url:
+        text = truncate(f"{caption}\n\nDownload: {fallback_url}", MESSAGE_LIMIT)
+        log("Bot API: sending the build info + download link instead")
+        try:
+            log(bot_api_call(cfg["bot_token"], "sendMessage", {"chat_id": cfg["chat"], "text": text})[:400])
+            return True
+        except Exception as exc:  # noqa: BLE001
+            warn(f"Bot API sendMessage failed: {exc}")
+    return False
+
+
+# --------------------------------------------------------------------------------------
+
+def load_config(require_mtproto: bool) -> dict:
+    cfg = {
+        "api_id": os.environ.get("TELEGRAM_API_ID", "").strip(),
+        "api_hash": os.environ.get("TELEGRAM_API_HASH", "").strip(),
+        "bot_token": os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(),
+        "chat": os.environ.get("TELEGRAM_CHAT_ID", "").strip(),
+        "session": os.environ.get("TELEGRAM_SESSION_STRING", "").strip(),
+    }
+    if require_mtproto:
+        missing = [k for k in ("api_id", "api_hash", "bot_token", "chat") if not cfg[k]]
+        if missing:
+            raise SystemExit(
+                "Missing Telegram configuration: "
+                + ", ".join("TELEGRAM_" + m.upper() for m in missing)
+                + "\nAdd them in Settings -> Secrets and variables -> Actions "
+                "(TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)."
+            )
+        if not cfg["api_hash"].replace(" ", "").isalnum() or len(cfg["api_hash"]) != 32:
+            warn(
+                "TELEGRAM_API_HASH does not look like a 32-character api hash; "
+                "copy it in full from https://my.telegram.org/apps"
+            )
+    return cfg
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Upload a build artifact to Telegram over MTProto")
+    parser.add_argument("--file", help="artifact to upload")
+    parser.add_argument("--caption", default="", help="caption text (<=1024 units)")
+    parser.add_argument("--caption-file", help="file holding the caption text")
+    parser.add_argument("--fallback-url", help="download link to send if the upload is impossible")
+    parser.add_argument("--make-session", action="store_true", help="print/store a StringSession and exit")
+    parser.add_argument("--login-user", action="store_true", help="with --make-session: log in as a user (interactive)")
+    parser.add_argument("--session-out", help="with --make-session: write the session string to this file")
+    parser.add_argument("--dry-run", action="store_true", help="validate caption/limits and print what would be sent")
+    args = parser.parse_args()
+
+    if args.make_session:
+        cfg = load_config(require_mtproto=False)
+        if not cfg["api_id"] or not cfg["api_hash"]:
+            raise SystemExit("--make-session needs TELEGRAM_API_ID and TELEGRAM_API_HASH")
+        if not args.login_user and not cfg["bot_token"]:
+            raise SystemExit("--make-session needs TELEGRAM_BOT_TOKEN (or --login-user)")
+        asyncio.run(make_session(args, cfg))
+        return 0
+
+    if not args.file:
+        raise SystemExit("--file is required")
+    path = Path(args.file)
+    if not path.is_file():
+        raise SystemExit(f"File not found: {path}")
+
+    cfg = load_config(require_mtproto=False)
+    cfg["caption"] = read_caption(args)
+    size = path.stat().st_size
+    truncated = utf16_len(cfg["caption"]) > CAPTION_LIMIT
+    if truncated:
+        warn(f"Caption is {utf16_len(cfg['caption'])} units; trimming to {CAPTION_LIMIT}")
+    cfg["caption"] = truncate(cfg["caption"], CAPTION_LIMIT)
+
+    log("=" * 70)
+    log(f"Artifact : {path} ({human_bytes(size)}, {size} bytes)")
+    log(f"MIME     : {guess_mime(path)}")
+    log(f"SHA-256  : {sha256_of(path)}")
+    log(f"Chat     : {cfg['chat'] or '(unset)'}")
+    log(f"Caption  : {utf16_len(cfg['caption'])}/{CAPTION_LIMIT} UTF-16 units")
+    log("-" * 70)
+    log(cfg["caption"])
+    log("=" * 70)
+
+    if args.dry_run:
+        log("Dry run: nothing sent.")
+        return 0
+
+    mtproto_ready = bool(cfg["api_id"] and cfg["api_hash"] and cfg["bot_token"] and cfg["chat"])
+    if mtproto_ready:
+        try:
+            if not cfg["session"]:
+                log("No TELEGRAM_SESSION_STRING set - logging in as the bot for this run.")
+            asyncio.run(mtproto_send(args, cfg))
+            if truncated and cfg["bot_token"] and cfg["chat"]:
+                bot_api_call(
+                    cfg["bot_token"],
+                    "sendMessage",
+                    {"chat_id": cfg["chat"], "text": truncate("[full build info]\n\n" + read_caption(args), MESSAGE_LIMIT)},
+                )
+            return 0
+        except ImportError:
+            warn("Telethon is not installed (pip install telethon) - falling back to the Bot API")
+        except Exception as exc:  # noqa: BLE001 - any MTProto failure degrades, never crashes the build
+            warn(f"MTProto upload failed: {type(exc).__name__}: {exc}")
+    else:
+        warn("MTProto credentials are incomplete - falling back to the Bot API")
+
+    if cfg["bot_token"] and cfg["chat"]:
+        if bot_api_fallback(cfg, path, cfg["caption"], args.fallback_url):
+            return 0
+    else:
+        warn("Bot API fallback also needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
+
+    warn("Telegram delivery failed; the GitHub release/artifact still has the APK.")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

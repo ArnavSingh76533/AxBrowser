@@ -22,6 +22,11 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
+    - name: Mark job start
+      id: t0
+      # Timestamp only, so the Telegram summary can report how long the build took.
+      run: echo "T0=$(date +%s)" >> "$GITHUB_OUTPUT"
+
     - name: Set up JDK 17
       uses: actions/setup-java@v4
       with:
@@ -56,9 +61,11 @@ jobs:
       run: ./gradlew assembleDebug --no-daemon --stacktrace -PaxVersionName=${{ steps.nightlyversion.outputs.VERSION }} -PaxVersionCode=${{ github.run_number }}
 
     - name: Run Unit Tests
+      id: tests
       run: ./gradlew testDebugUnitTest --no-daemon --stacktrace
 
     - name: Run Android Lint
+      id: lint
       run: ./gradlew lintDebug --no-daemon --continue || true
 
     - name: Upload Debug APK
@@ -96,40 +103,64 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Send build to Telegram
+    - name: Send APK to Telegram (whole file, MTProto)
       if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-      # Sends a message with a direct download LINK, not the APK file itself. Telegram's Bot API
-      # (the standard api.telegram.org endpoint, as opposed to running your own local Bot API
-      # server) hard-caps sendDocument at 50MB - this debug APK is ~120MB, so a direct upload
-      # gets rejected with 413 Request Entity Too Large every time, no amount of retrying or
-      # compression fixes that (the APK is already a compressed zip archive). The GitHub release
-      # asset published in the previous step (public, no auth needed to download) is the actual
-      # file host; this step runs after it so the link is guaranteed live.
+      # Uploads the ACTUAL APK, not a link. The HTTP Bot API (api.telegram.org) hard-caps
+      # sendDocument at 50MB, which this ~120MB debug APK always exceeds, so the upload goes
+      # over MTProto via Telethon (scripts/telegram_upload.py) where the same bot can send up
+      # to 2GB. Credentials come from repo secrets; if they are missing or MTProto is refused
+      # the script degrades to the Bot API and finally to an info message with the release
+      # link, so a Telegram hiccup can never fail the build (continue-on-error below).
+      # Captions are capped by Telegram at 1024 UTF-16 units (4096 for plain messages); the
+      # script trims to fit instead of letting the API reject the upload.
       continue-on-error: true
       env:
-        BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        COMMIT_MSG: ${{ github.event.head_commit.message }}
-        COMMIT_SHA: ${{ github.sha }}
+        TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID || '22138159' }}
+        TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        TELEGRAM_SESSION_STRING: ${{ secrets.TELEGRAM_SESSION_STRING }}
         VERSION: ${{ steps.nightlyversion.outputs.VERSION }}
+        RUN_NUMBER: ${{ github.run_number }}
         REPO: ${{ github.repository }}
+        SHA: ${{ github.sha }}
+        REF_NAME: ${{ github.ref_name }}
+        RUN_ID: ${{ github.run_id }}
+        JOB_START: ${{ steps.t0.outputs.T0 }}
+        TESTS: ${{ steps.tests.outcome }}
+        LINT: ${{ steps.lint.outcome }}
+        COMMIT_MSG: ${{ github.event.head_commit.message }}
       run: |
-        if [ -z "$BOT_TOKEN" ] || [ -z "$CHAT_ID" ]; then
+        if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
           echo "Telegram secrets not set, skipping."
           exit 0
         fi
+        python3 -m pip install --quiet --disable-pip-version-check "telethon>=1.36"
+
         APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -1)
-        SIZE_MB=$(du -m "$APK" | cut -f1)
+        BYTES=$(stat -c%s "$APK")
+        MB=$(awk -v b="$BYTES" 'BEGIN { printf "%.1f", b / 1048576 }')
+        SHA256=$(sha256sum "$APK" | cut -d' ' -f1)
         DOWNLOAD_URL="https://github.com/${REPO}/releases/download/nightly/AxBrowser-nightly.apk"
-        # Message text is capped at 4096 chars and sent as a form field, not interpolated into a
-        # shell command, so a commit message containing quotes/backticks/$() can't do anything
-        # unexpected here. printf (not an embedded literal newline) keeps this step's YAML valid.
-        TEXT=$(printf 'AxBrowser nightly v%s (%sMB)\nCommit: %s\n\n%s\n\nDownload: %s' \
-          "$VERSION" "$SIZE_MB" "${COMMIT_SHA:0:7}" "$COMMIT_MSG" "$DOWNLOAD_URL")
-        TEXT="${TEXT:0:4096}"
-        curl -sS -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-          -F "chat_id=${CHAT_ID}" \
-          -F "text=${TEXT}"
+        NOW=$(date -u '+%d %b %Y %H:%M')
+        ELAPSED=$(( $(date +%s) - ${JOB_START:-$(date +%s)} ))
+        # Only the first line of the commit message, so a multi-paragraph body can't push the
+        # caption over Telegram's 1024-unit cap (the script trims as a final safety net).
+        SUBJECT=$(printf '%s' "$COMMIT_MSG" | head -n1 | cut -c1-160)
+
+        # Written to a file rather than passed as an argument/env value: the caption is
+        # multi-line and may contain quotes, % or $( ) from the commit subject.
+        CAPTION_FILE="${RUNNER_TEMP}/telegram-caption.txt"
+        printf '🚀 AxBrowser nightly v%s (debug)\n\n📦 AxBrowser-nightly.apk · %s MB · %s bytes\n🔐 SHA-256 %s\n🔖 versionCode %s · build #%s\n🌿 %s @ %s\n🕒 %s UTC · CI took %dm %ds\n✅ unit tests: %s · lint: %s\n📝 %s\n🧾 commit: https://github.com/%s/commit/%s\n⚙️ run: https://github.com/%s/actions/runs/%s\n⬇️ %s' \
+          "$VERSION" "$MB" "$BYTES" "$SHA256" "$RUN_NUMBER" "$RUN_NUMBER" \
+          "$REF_NAME" "${SHA:0:7}" "$NOW" "$((ELAPSED / 60))" "$((ELAPSED % 60))" \
+          "$TESTS" "$LINT" "$SUBJECT" "$REPO" "$SHA" "$REPO" "$RUN_ID" "$DOWNLOAD_URL" \
+          > "$CAPTION_FILE"
+
+        python3 scripts/telegram_upload.py \
+          --file "$APK" \
+          --caption-file "$CAPTION_FILE" \
+          --fallback-url "$DOWNLOAD_URL"
 
     - name: Upload Test Results
       uses: actions/upload-artifact@v4
