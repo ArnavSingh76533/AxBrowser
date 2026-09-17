@@ -10,8 +10,12 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -21,8 +25,10 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -31,16 +37,25 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.akay.core.domain.model.HttpTransaction
+import com.akay.feature.browser.webview.ConsoleRing
 import com.akay.feature.pentest.repeater.RepeaterBridge
 import com.akay.feature.pentest.ui.AuditTab
 import com.akay.feature.pentest.ui.DecoderTab
 import com.akay.feature.pentest.ui.InterceptTab
 import com.akay.feature.pentest.ui.IntruderTab
 import com.akay.feature.pentest.ui.RepeaterTab
+import kotlinx.coroutines.launch
+
+// Tab indices, named so adding a tab can't silently break the clear button or a cross-tab jump.
+private const val TAB_CONSOLE = 0
+private const val TAB_NETWORK = 1
+private const val TAB_REPEATER = 3
 
 private enum class NetFilter(val label: String) {
     ALL("All"), XHR("XHR/Fetch"), JS("JS"), CSS("CSS"), IMG("Img"), MEDIA("Media"), DOC("Doc"), BLOCKED("Blocked")
@@ -52,13 +67,21 @@ fun DevConsolePanel(
     isVisible: Boolean,
     currentPageUrl: String,
     currentPageHtml: String = "",
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    /** Runs JS in the live page and returns its stringified result - the Console tab's REPL.
+     *  Null when no WebView is attached yet, in which case the tab says so instead of
+     *  silently swallowing input. */
+    onEvaluateJs: (suspend (String) -> String)? = null
 ) {
     val requests by NetworkInterceptor.requests.collectAsState()
     val rules by NetworkInterceptor.rules.collectAsState()
-    var selectedTab by remember { mutableIntStateOf(0) }
+    // Reading the ring's version keeps the Console tab title's count live as the page logs.
+    val consoleVersion by ConsoleRing.version.collectAsState()
+    val consoleCount = remember(consoleVersion) { ConsoleRing.count() }
+    var selectedTab by remember { mutableIntStateOf(TAB_NETWORK) }
     var selectedRequest by remember { mutableStateOf<NetworkRequest?>(null) }
     val tabs = listOf(
+        if (consoleCount > 0) "Console ($consoleCount)" else "Console",
         "Network (${requests.size})",
         "Intercept",
         "Repeater",
@@ -86,7 +109,7 @@ fun DevConsolePanel(
                     Icon(Icons.Default.BugReport, null, tint = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.width(8.dp))
                     Text("Dev Tools", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                    if (selectedTab == 0) {
+                    if (selectedTab == TAB_NETWORK) {
                         IconButton(onClick = { NetworkInterceptor.clear() }) {
                             Icon(Icons.Default.DeleteSweep, "Clear")
                         }
@@ -109,15 +132,16 @@ fun DevConsolePanel(
                 HorizontalDivider()
 
                 when (selectedTab) {
-                    0 -> NetworkTab(requests = requests, onSelectRequest = { selectedRequest = it })
-                    1 -> InterceptTab()
-                    2 -> RepeaterTab()
-                    3 -> IntruderTab()
-                    4 -> DecoderTab()
-                    5 -> AuditTab(transactions = auditTransactions)
-                    6 -> RulesTab(rules = rules)
-                    7 -> ElementsTab(html = currentPageHtml)
-                    8 -> InfoTab(url = currentPageUrl, requestCount = requests.size, ruleCount = rules.size)
+                    TAB_CONSOLE -> ConsoleTab(onEvaluateJs = onEvaluateJs)
+                    TAB_NETWORK -> NetworkTab(requests = requests, onSelectRequest = { selectedRequest = it })
+                    2 -> InterceptTab()
+                    3 -> RepeaterTab()
+                    4 -> IntruderTab()
+                    5 -> DecoderTab()
+                    6 -> AuditTab(transactions = auditTransactions)
+                    7 -> RulesTab(rules = rules)
+                    8 -> ElementsTab(html = currentPageHtml)
+                    9 -> InfoTab(url = currentPageUrl, requestCount = requests.size, ruleCount = rules.size)
                 }
             }
 
@@ -125,7 +149,7 @@ fun DevConsolePanel(
                 RequestDetailSheet(
                     request = req,
                     onDismiss = { selectedRequest = null },
-                    onSendToRepeater = { selectedTab = 2 }
+                    onSendToRepeater = { selectedTab = TAB_REPEATER }
                 )
             }
         }
@@ -490,6 +514,7 @@ fun InfoTab(url: String, requestCount: Int, ruleCount: Int) {
         InfoRow("fetch / XHR capture", "Bodies captured when Dev Console is ON")
         InfoRow("Interceptor", "Add rules under the Rules tab to block requests")
         InfoRow("Eruda", "Full JS console injected when Dev Console is ON")
+        InfoRow("Console tab", "Run JS in this page and read the page's own console output")
     }
 }
 
@@ -518,6 +543,184 @@ private fun NetworkRequest.toTransaction(): HttpTransaction = HttpTransaction(
     responseBody = responseBody.takeIf { it.isNotBlank() }?.toByteArray(),
     responseTimeMs = durationMs,
     source = "capture"
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ConsoleTab(onEvaluateJs: (suspend (String) -> String)?) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val consoleVersion by ConsoleRing.version.collectAsState()
+    var input by remember { mutableStateOf("") }
+    var entries by remember { mutableStateOf<List<ConsoleEntry>>(emptyList()) }
+    var running by remember { mutableStateOf(false) }
+    val history = rememberLazyListState()
+    val consoleScroll = rememberScrollState()
+
+    val pageConsole = remember(consoleVersion) { ConsoleRing.recent() }
+    val hasPageConsole = pageConsole != PAGE_CONSOLE_EMPTY
+
+    // Keep the newest console line and newest eval result in view without stealing manual scroll.
+    LaunchedEffect(pageConsole) { consoleScroll.scrollTo(consoleScroll.maxValue) }
+    LaunchedEffect(entries.size) {
+        if (entries.isNotEmpty()) history.animateScrollToItem(entries.lastIndex)
+    }
+
+    fun run(code: String) {
+        val script = code.trim()
+        val evaluate = onEvaluateJs
+        if (script.isEmpty() || running || evaluate == null) return
+        running = true
+        scope.launch {
+            val result = try {
+                evaluate(script)
+            } catch (e: Throwable) {
+                "JS Error: ${e.message ?: e::class.simpleName}"
+            }
+            entries = entries + ConsoleEntry(script, result, !result.startsWith("JS Error:"))
+            running = false
+            input = ""
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        if (onEvaluateJs == null) {
+            Text(
+                "The page isn't ready yet - open a page and reopen Dev Tools.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+            )
+        }
+
+        // One-tap starting points: the things a hunter/scraper types into a console first.
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            CONSOLE_SNIPPETS.forEach { snippet ->
+                AssistChip(
+                    onClick = { input = snippet },
+                    label = { Text(snippet, fontSize = 10.sp, fontFamily = FontFamily.Monospace, maxLines = 1) }
+                )
+            }
+        }
+
+        if (hasPageConsole) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Default.Terminal, null, modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(6.dp))
+                Text("Page console", fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f))
+                IconButton(onClick = { copyToClipboard(context, "console log", pageConsole) }) {
+                    Icon(Icons.Default.ContentCopy, "Copy log", modifier = Modifier.size(16.dp))
+                }
+                IconButton(onClick = { ConsoleRing.clear() }) {
+                    Icon(Icons.Default.DeleteSweep, "Clear log", modifier = Modifier.size(16.dp))
+                }
+            }
+            Box(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 130.dp)
+                    .verticalScroll(consoleScroll)
+                    .padding(horizontal = 12.dp)
+            ) {
+                SelectionContainer {
+                    Text(pageConsole, fontFamily = FontFamily.Monospace, fontSize = 10.sp, lineHeight = 14.sp)
+                }
+            }
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+        }
+
+        if (entries.isEmpty()) {
+            Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text(
+                    "Type JS below and press Run. It executes in the page's own context,\nso any page variable or function is reachable.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+            }
+        } else {
+            LazyColumn(state = history, modifier = Modifier.weight(1f).fillMaxWidth()) {
+                itemsIndexed(entries) { _, entry ->
+                    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("\u203A", fontFamily = FontFamily.Monospace, fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.primary, modifier = Modifier.width(12.dp))
+                            Text(entry.input, fontFamily = FontFamily.Monospace, fontSize = 11.sp,
+                                modifier = Modifier.weight(1f))
+                            IconButton(onClick = { run(entry.input) }) {
+                                Icon(Icons.Default.PlayArrow, "Run again", modifier = Modifier.size(16.dp))
+                            }
+                            IconButton(onClick = { copyToClipboard(context, "result", entry.output) }) {
+                                Icon(Icons.Default.ContentCopy, "Copy result", modifier = Modifier.size(16.dp))
+                            }
+                        }
+                        SelectionContainer {
+                            Text(
+                                entry.output,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                color = if (entry.ok) MaterialTheme.colorScheme.onSurface
+                                else Color(0xFFFF6B6B)
+                            )
+                        }
+                    }
+                    HorizontalDivider(thickness = 0.5.dp)
+                }
+            }
+        }
+
+        HorizontalDivider()
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.Bottom
+        ) {
+            OutlinedTextField(
+                value = input,
+                onValueChange = { input = it },
+                modifier = Modifier.weight(1f),
+                placeholder = { Text("Run JS in this page\u2026", fontSize = 12.sp) },
+                textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                maxLines = 4,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                keyboardActions = KeyboardActions(onGo = { run(input) })
+            )
+            IconButton(
+                onClick = { run(input) },
+                enabled = input.isNotBlank() && !running && onEvaluateJs != null
+            ) {
+                if (running) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                } else {
+                    Icon(Icons.Default.PlayArrow, "Run")
+                }
+            }
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+private data class ConsoleEntry(val input: String, val output: String, val ok: Boolean)
+
+private const val PAGE_CONSOLE_EMPTY = "No console messages captured on this page."
+
+/** First things to reach for in a page's console: identity, credentials, storage, and the
+ *  script/resource surface a hunter or scraper wants to enumerate. */
+private val CONSOLE_SNIPPETS = listOf(
+    "location.href",
+    "document.title",
+    "document.cookie",
+    "JSON.stringify(localStorage)",
+    "Object.keys(window).slice(0, 50)",
+    "[...document.querySelectorAll('script[src]')].map(s => s.src)",
+    "[...document.forms].map(f => f.action)",
+    "performance.getEntriesByType('resource').map(r => r.name).slice(-30)"
 )
 
 private fun copyToClipboard(context: Context, label: String, text: String) {

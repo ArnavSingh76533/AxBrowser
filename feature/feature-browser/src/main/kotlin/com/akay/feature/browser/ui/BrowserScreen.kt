@@ -19,6 +19,7 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -32,6 +33,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontFamily
@@ -39,6 +42,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -66,6 +71,7 @@ import com.akay.feature.browser.webview.HttpHeaderUtil
 import com.akay.feature.downloads.ui.DetectedMediaUi
 import com.akay.feature.downloads.ui.MediaBottomSheet
 import com.akay.feature.downloads.viewmodel.DownloadViewModel
+import kotlin.math.roundToInt
 
 private const val DESKTOP_USER_AGENT =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -98,6 +104,12 @@ fun BrowserScreen(
     val keyboardController = LocalSoftwareKeyboardController.current
     var showMediaSheet by remember { mutableStateOf(false) }
     var showPasteLinkDialog by remember { mutableStateOf(false) }
+    // Draggable floating controls (media button + paste-link button). NaN = "use the default
+    // bottom-right corner", so the position is only pinned once the operator actually drags.
+    var floatingX by rememberSaveable { mutableFloatStateOf(Float.NaN) }
+    var floatingY by rememberSaveable { mutableFloatStateOf(Float.NaN) }
+    var floatingAreaSize by remember { mutableStateOf(IntSize.Zero) }
+    var floatingSize by remember { mutableStateOf(IntSize.Zero) }
     var pasteUrl by remember { mutableStateOf("") }
     var showMenu by remember { mutableStateOf(false) }
     var agentSheetVisible by remember { mutableStateOf(false) }
@@ -812,63 +824,94 @@ fun BrowserScreen(
             }
 
             if (!uiState.showTabSwitcher && !isNewTab && fullscreenView == null) {
-                Column(
+                // Floating controls sit in a drag-anywhere overlay. Default is the bottom-right
+                // corner (as before); once dragged, the stack stays where it was put so it stops
+                // covering the page being inspected. Clamped to the content area so a button can
+                // never be moved off-screen. Position survives rotation via rememberSaveable.
+                Box(
                     modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(16.dp),
-                    horizontalAlignment = Alignment.End
+                        .fillMaxSize()
+                        .onSizeChanged { floatingAreaSize = it }
                 ) {
-                    AnimatedVisibility(
-                        visible = mediaCount > 0,
-                        enter = scaleIn(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeIn(),
-                        exit  = scaleOut(tween(200)) + fadeOut()
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-                            val pulseScale by infiniteTransition.animateFloat(
-                                initialValue = 1f, targetValue = 1.25f,
-                                animationSpec = infiniteRepeatable(
-                                    animation  = tween(900, easing = EaseInOut),
-                                    repeatMode = RepeatMode.Reverse
-                                ), label = "ring"
-                            )
-                            val pulseAlpha by infiniteTransition.animateFloat(
-                                initialValue = 0.4f, targetValue = 0f,
-                                animationSpec = infiniteRepeatable(
-                                    animation  = tween(900),
-                                    repeatMode = RepeatMode.Reverse
-                                ), label = "ringAlpha"
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .size(56.dp)
-                                    .scale(pulseScale)
-                                    .background(Primary.copy(alpha = pulseAlpha), CircleShape)
-                            )
-                            ExtendedFloatingActionButton(
-                                onClick = { showMediaSheet = true },
-                                containerColor = Primary,
-                                contentColor = Color.White,
-                                icon = { Icon(Icons.Default.Download, null) },
-                                text = {
-                                    Text(
-                                        if (mediaCount == 1) "1 media" else "$mediaCount media",
-                                        fontWeight = FontWeight.SemiBold
-                                    )
+                    val maxX = (floatingAreaSize.width - floatingSize.width).coerceAtLeast(0).toFloat()
+                    val maxY = (floatingAreaSize.height - floatingSize.height).coerceAtLeast(0).toFloat()
+                    val floatingPosX = if (floatingX.isNaN()) maxX else floatingX.coerceIn(0f, maxX)
+                    val floatingPosY = if (floatingY.isNaN()) maxY else floatingY.coerceIn(0f, maxY)
+                    Column(
+                        modifier = Modifier
+                            .offset { IntOffset(floatingPosX.roundToInt(), floatingPosY.roundToInt()) }
+                            .onSizeChanged { floatingSize = it }
+                            // Drag anywhere on the stack to move it. Taps still reach the buttons:
+                            // detectDragGestures only consumes the pointer past the touch slop, so a
+                            // plain tap is never swallowed by the drag handler.
+                            .pointerInput(Unit) {
+                                detectDragGestures { change, dragAmount ->
+                                    change.consume()
+                                    val limitX = (floatingAreaSize.width - floatingSize.width)
+                                        .coerceAtLeast(0).toFloat()
+                                    val limitY = (floatingAreaSize.height - floatingSize.height)
+                                        .coerceAtLeast(0).toFloat()
+                                    val baseX = if (floatingX.isNaN()) limitX else floatingX
+                                    val baseY = if (floatingY.isNaN()) limitY else floatingY
+                                    floatingX = (baseX + dragAmount.x).coerceIn(0f, limitX)
+                                    floatingY = (baseY + dragAmount.y).coerceIn(0f, limitY)
                                 }
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    SmallFloatingActionButton(
-                        onClick = { showPasteLinkDialog = true },
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                        shape = CircleShape
+                            }
+                            .padding(16.dp),
+                        horizontalAlignment = Alignment.End
                     ) {
-                        Icon(Icons.Default.Link, "Paste Link",
-                            tint = MaterialTheme.colorScheme.primary)
+                        AnimatedVisibility(
+                            visible = mediaCount > 0,
+                            enter = scaleIn(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeIn(),
+                            exit  = scaleOut(tween(200)) + fadeOut()
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+                                val pulseScale by infiniteTransition.animateFloat(
+                                    initialValue = 1f, targetValue = 1.25f,
+                                    animationSpec = infiniteRepeatable(
+                                        animation  = tween(900, easing = EaseInOut),
+                                        repeatMode = RepeatMode.Reverse
+                                    ), label = "ring"
+                                )
+                                val pulseAlpha by infiniteTransition.animateFloat(
+                                    initialValue = 0.4f, targetValue = 0f,
+                                    animationSpec = infiniteRepeatable(
+                                        animation  = tween(900),
+                                        repeatMode = RepeatMode.Reverse
+                                    ), label = "ringAlpha"
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .size(56.dp)
+                                        .scale(pulseScale)
+                                        .background(Primary.copy(alpha = pulseAlpha), CircleShape)
+                                )
+                                ExtendedFloatingActionButton(
+                                    onClick = { showMediaSheet = true },
+                                    containerColor = Primary,
+                                    contentColor = Color.White,
+                                    icon = { Icon(Icons.Default.Download, null) },
+                                    text = {
+                                        Text(
+                                            if (mediaCount == 1) "1 media" else "$mediaCount media",
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        SmallFloatingActionButton(
+                            onClick = { showPasteLinkDialog = true },
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                            shape = CircleShape
+                        ) {
+                            Icon(Icons.Default.Link, "Paste Link",
+                                tint = MaterialTheme.colorScheme.primary)
+                        }
                     }
                 }
             }
@@ -910,7 +953,14 @@ fun BrowserScreen(
             isVisible = uiState.devConsoleVisible,
             currentPageUrl = uiState.displayUrl,
             currentPageHtml = uiState.pageHtml,
-            onDismiss = { viewModel.toggleDevConsole() }
+            onDismiss = { viewModel.toggleDevConsole() },
+            // Console tab REPL: same evaluation path the agent's run_js uses, so a snippet that
+            // works for the agent works for the operator typing it by hand.
+            onEvaluateJs = { code ->
+                val wv = webView
+                if (wv == null) "No page is currently loaded."
+                else unwrapJsString(wv.evalJs(com.akay.feature.browser.agent.AgentJs.runJs(code)))
+            }
         )
 
         if (showMediaSheet) {
