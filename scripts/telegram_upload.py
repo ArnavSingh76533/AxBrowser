@@ -321,7 +321,13 @@ def bot_api_call(token: str, method: str, fields: dict, files: dict | None = Non
         return resp.read().decode("utf-8", "replace")
 
 
-def bot_api_fallback(cfg: dict, path: Path, caption: str, fallback_url: str | None) -> bool:
+def bot_api_fallback(
+    cfg: dict,
+    path: Path,
+    caption: str,
+    fallback_url: str | None,
+    note: str | None = None,
+) -> bool:
     size = path.stat().st_size
     if size <= BOT_API_DOC_LIMIT:
         log(f"Bot API: sending {path.name} as a document ({human_bytes(size)})")
@@ -344,7 +350,10 @@ def bot_api_fallback(cfg: dict, path: Path, caption: str, fallback_url: str | No
         )
 
     if fallback_url:
-        text = truncate(f"{caption}\n\nDownload: {fallback_url}", MESSAGE_LIMIT)
+        # Lead with why the real upload did not happen: reading it in the Telegram chat is
+        # how this gets diagnosed from a phone instead of from the Actions log.
+        header = f"⚠️ {note}\n\n" if note else ""
+        text = truncate(f"{header}{caption}\n\nDownload: {fallback_url}", MESSAGE_LIMIT)
         log("Bot API: sending the build info + download link instead")
         try:
             log(bot_api_call(cfg["bot_token"], "sendMessage", {"chat_id": cfg["chat"], "text": text})[:400])
@@ -472,6 +481,7 @@ def main() -> int:
     log("=" * 70)
 
     missing = missing_pieces(cfg)
+    note: str | None = None
 
     if args.dry_run:
         for label in missing:
@@ -493,16 +503,19 @@ def main() -> int:
                 )
             return 0
         except ImportError:
-            warn("Telethon is not installed (pip install telethon) - falling back to the Bot API")
+            note = "Telethon is not installed on the runner."
+            warn(f"{note} Falling back to the Bot API")
         except Exception as exc:  # noqa: BLE001 - any MTProto failure degrades, never crashes the build
-            warn(f"MTProto upload failed: {type(exc).__name__}: {exc}")
+            note = f"MTProto upload failed: {type(exc).__name__}: {exc}"
+            warn(f"{note} Falling back to the Bot API")
     else:
-        warn("MTProto credentials are incomplete - falling back to the Bot API")
+        note = "MTProto credentials are incomplete (missing: " + ", ".join(missing) + ")."
+        warn(note + " Falling back to the Bot API")
         for label in missing:
             warn(f"  missing: {label}")
 
     if cfg["bot_token"] and cfg["chat"]:
-        if bot_api_fallback(cfg, path, cfg["caption"], args.fallback_url):
+        if bot_api_fallback(cfg, path, cfg["caption"], args.fallback_url, note=note):
             return 0
     else:
         warn("Bot API fallback also needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
