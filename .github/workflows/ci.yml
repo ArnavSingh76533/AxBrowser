@@ -37,7 +37,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ${{ runner.temp }}/ax-telegram.session
-        key: ax-telegram-session-v1
+        key: ax-telegram-session-v2
 
     - name: Install Telethon
       run: python3 -m pip install --quiet --disable-pip-version-check "telethon>=1.36"
@@ -45,7 +45,7 @@ jobs:
     - name: Check Telegram credentials (login + chat)
       env:
         TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID || '22138159' }}
-        TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH || '3fe4592e4cad72f366b6c564505f' }}
+        TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH || '3fe4592e4cad72f366b6c564505f2d57' }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         TELEGRAM_SESSION_STRING: ${{ secrets.TELEGRAM_SESSION_STRING }}
@@ -155,7 +155,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ${{ runner.temp }}/ax-telegram.session
-        key: ax-telegram-session-v1
+        key: ax-telegram-session-v2
 
     - name: Send APK to Telegram (whole file, MTProto)
       if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
@@ -172,7 +172,7 @@ jobs:
       continue-on-error: true
       env:
         TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID || '22138159' }}
-        TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH || '3fe4592e4cad72f366b6c564505f' }}
+        TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH || '3fe4592e4cad72f366b6c564505f2d57' }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         TELEGRAM_SESSION_STRING: ${{ secrets.TELEGRAM_SESSION_STRING }}

@@ -173,15 +173,23 @@ def save_session(args: argparse.Namespace, client) -> None:
 
 
 async def mtproto_login(client, cfg: dict):
-    """Sign in with the saved session when there is one, else as the bot."""
+    """Sign in with the saved session when it is usable, else as the bot.
+
+    A saved session is only an optimisation, so a stale/revoked one must never be the
+    reason an upload degrades to the Bot API: fall through to a fresh bot login instead.
+    """
     if cfg["session"]:
-        await client.connect()
-        if not await client.is_user_authorized():
-            raise RuntimeError(
-                "the saved Telegram session is not authorised (revoked, or created for "
-                "another api_id)"
+        try:
+            await client.connect()
+            if await client.is_user_authorized():
+                return False
+            warn("The saved MTProto session is not authorised any more - logging in again.")
+        except Exception as exc:  # noqa: BLE001
+            warn(
+                f"The saved MTProto session is unusable ({type(exc).__name__}: {exc}) "
+                "- logging in again."
             )
-        return False
+        cfg["session"] = ""  # a fresh session replaces it below
     # importBotAuthorization - no phone number or login code needed.
     await client.start(bot_token=cfg["bot_token"])
     return True
