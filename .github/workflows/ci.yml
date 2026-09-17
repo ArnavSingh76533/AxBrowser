@@ -18,6 +18,45 @@ permissions:
   contents: write
 
 jobs:
+  telegram:
+    # Fast non-blocking preflight (about a minute, runs next to the build instead of
+    # after it): proves the MTProto credentials can actually log the bot in and resolve
+    # the chat, and creates the reusable session for the upload step. Without this, a
+    # Telegram credential problem only showed up at the very end of a ~20 minute build.
+    name: Telegram preflight
+    if: github.ref == 'refs/heads/main'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Restore Telegram MTProto session
+      continue-on-error: true
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/ax-telegram.session
+        key: ax-telegram-session-v1
+
+    - name: Install Telethon
+      run: python3 -m pip install --quiet --disable-pip-version-check "telethon>=1.36"
+
+    - name: Check Telegram credentials (login + chat)
+      env:
+        TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID || '22138159' }}
+        TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH || '3fe4592e4cad72f366b6c564505f' }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        TELEGRAM_SESSION_STRING: ${{ secrets.TELEGRAM_SESSION_STRING }}
+      run: |
+        if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+          echo "::warning::Telegram secrets not set, skipping the preflight."
+          exit 0
+        fi
+        python3 scripts/telegram_upload.py --check \
+          --session-file "${RUNNER_TEMP}/ax-telegram.session"
+
   build:
     name: Build & Test
     runs-on: ubuntu-latest
