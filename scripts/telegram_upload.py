@@ -338,6 +338,7 @@ def bot_api_call(token: str, method: str, fields: dict, files: dict | None = Non
 def bot_api_send_parts(
     cfg: dict,
     path: Path,
+    caption: str = "",
     note: str | None = None,
 ) -> bool:
     """Split a too-large artifact into sub-50MB documents - the only way the plain Bot API
@@ -374,7 +375,11 @@ def bot_api_send_parts(
                 return False
             log(f"  part {index}/{count}: sent")
 
+        # The build info rides on the join message: it is the one message that has to be
+        # read, and it keeps the part captions short and uniform.
         join = (
+            f"{caption}\n\n" if caption else ""
+        ) + (
             f"Join the {count} parts back into one APK:\n\n"
             f"Linux/macOS:  cat {path.name}.part* > {path.name}\n"
             f"Windows:  copy /b {path.name}.part* {path.name}\n\n"
@@ -421,7 +426,7 @@ def bot_api_fallback(
             f"Bot API cannot carry {human_bytes(size)} in one message "
             f"(sendDocument limit is {human_bytes(BOT_API_DOC_LIMIT)})."
         )
-        if allow_split and bot_api_send_parts(cfg, path, note=note):
+        if allow_split and bot_api_send_parts(cfg, path, caption=caption, note=note):
             return True
 
     if fallback_url:
