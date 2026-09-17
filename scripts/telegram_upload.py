@@ -27,6 +27,16 @@ TELEGRAM_SESSION_STRING                 optional StringSession; preferred over t
                                         login only happens once and later builds
                                         reuse the saved session
 
+Fallback chain (each step only runs when the one before it cannot deliver)
+------------------------------------------------------------------------
+1. MTProto document upload - the whole file, up to 2GB.
+2. Bot API sendDocument   - only possible up to 50MB.
+3. Bot API parts          - a >50MB artifact split into sub-50MB documents, plus the
+                            one-line command that joins them back together.
+4. Info message           - the full build info plus the GitHub release link.
+Every step reports why the previous one did not happen, in the chat as well as the log,
+and the failure of any step still exits 0 as long as one of them delivered the build.
+
 Character limits (Telegram counts UTF-16 code units, so one emoji = 2):
   - document caption : 1024  -> --caption-file is truncated, never rejected
   - message text     : 4096
@@ -52,9 +62,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import math
 import mimetypes
 import os
+import shutil
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -65,6 +78,7 @@ from pathlib import Path
 CAPTION_LIMIT = 1024  # Telegram document caption
 MESSAGE_LIMIT = 4096  # Telegram message text
 BOT_API_DOC_LIMIT = 50 * 1024 * 1024  # Bot API sendDocument ceiling
+BOT_API_PART_SIZE = 45 * 1024 * 1024  # part size that stays safely under that ceiling
 APK_MIME = "application/vnd.android.package-archive"
 
 TRUNCATED_MARK = "\n… (truncated)"
@@ -321,12 +335,71 @@ def bot_api_call(token: str, method: str, fields: dict, files: dict | None = Non
         return resp.read().decode("utf-8", "replace")
 
 
+def bot_api_send_parts(
+    cfg: dict,
+    path: Path,
+    note: str | None = None,
+) -> bool:
+    """Split a too-large artifact into sub-50MB documents - the only way the plain Bot API
+    can carry a >50MB APK at all, so the file still reaches the chat when MTProto cannot."""
+    size = path.stat().st_size
+    count = math.ceil(size / BOT_API_PART_SIZE)
+    log(f"Bot API: splitting into {count} parts (max {human_bytes(BOT_API_PART_SIZE)} each)")
+    tmpdir = Path(tempfile.mkdtemp(prefix="ax-telegram-parts-"))
+    try:
+        parts: list[Path] = []
+        with path.open("rb") as src:
+            for index in range(1, count + 1):
+                part = tmpdir / f"{path.name}.part{index:02d}"
+                part.write_bytes(src.read(BOT_API_PART_SIZE))
+                parts.append(part)
+
+        for index, part in enumerate(parts, start=1):
+            header = f"⚠️ {note}\n\n" if note and index == 1 else ""
+            caption = truncate(
+                f"{header}{path.name} — part {index} of {count} "
+                f"({human_bytes(part.stat().st_size)})",
+                CAPTION_LIMIT,
+            )
+            log(f"Bot API: part {index}/{count} ({human_bytes(part.stat().st_size)})")
+            try:
+                bot_api_call(
+                    cfg["bot_token"],
+                    "sendDocument",
+                    {"chat_id": cfg["chat"], "caption": caption},
+                    {"document": (part.name, part.read_bytes(), guess_mime(path))},
+                )
+            except Exception as exc:  # noqa: BLE001 - reported, then the link path takes over
+                warn(f"Bot API part {index}/{count} failed: {exc}")
+                return False
+            log(f"  part {index}/{count}: sent")
+
+        join = (
+            f"Join the {count} parts back into one APK:\n\n"
+            f"Linux/macOS:  cat {path.name}.part* > {path.name}\n"
+            f"Windows:  copy /b {path.name}.part* {path.name}\n\n"
+            "(Telegram renames downloads to the part filenames, so keep them together.)"
+        )
+        try:
+            bot_api_call(
+                cfg["bot_token"],
+                "sendMessage",
+                {"chat_id": cfg["chat"], "text": truncate(join, MESSAGE_LIMIT)},
+            )
+        except Exception as exc:  # noqa: BLE001
+            warn(f"Bot API join instructions failed: {exc}")
+        return True
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def bot_api_fallback(
     cfg: dict,
     path: Path,
     caption: str,
     fallback_url: str | None,
     note: str | None = None,
+    allow_split: bool = True,
 ) -> bool:
     size = path.stat().st_size
     if size <= BOT_API_DOC_LIMIT:
@@ -345,9 +418,11 @@ def bot_api_fallback(
             warn(f"Bot API sendDocument failed: {exc}")
     else:
         warn(
-            f"Bot API cannot carry {human_bytes(size)} "
+            f"Bot API cannot carry {human_bytes(size)} in one message "
             f"(sendDocument limit is {human_bytes(BOT_API_DOC_LIMIT)})."
         )
+        if allow_split and bot_api_send_parts(cfg, path, note=note):
+            return True
 
     if fallback_url:
         # Lead with why the real upload did not happen: reading it in the Telegram chat is
@@ -421,6 +496,11 @@ def main() -> int:
     parser.add_argument("--check", action="store_true", help="doctor: verify login + chat and exit")
     parser.add_argument("--send-test", action="store_true", help="with --check: send a short test message")
     parser.add_argument("--dry-run", action="store_true", help="validate caption/limits and print what would be sent")
+    parser.add_argument(
+        "--no-split",
+        action="store_true",
+        help="never split a too-large artifact into sub-50MB Bot API parts",
+    )
     args = parser.parse_args()
 
     cfg = load_config()
@@ -515,7 +595,14 @@ def main() -> int:
             warn(f"  missing: {label}")
 
     if cfg["bot_token"] and cfg["chat"]:
-        if bot_api_fallback(cfg, path, cfg["caption"], args.fallback_url, note=note):
+        if bot_api_fallback(
+            cfg,
+            path,
+            cfg["caption"],
+            args.fallback_url,
+            note=note,
+            allow_split=not args.no_split,
+        ):
             return 0
     else:
         warn("Bot API fallback also needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
