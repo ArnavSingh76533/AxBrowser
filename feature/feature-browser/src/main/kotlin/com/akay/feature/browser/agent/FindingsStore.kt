@@ -146,13 +146,13 @@ class FindingsStore @Inject constructor(
         ensureLoaded()
         val current = _findings.value
         if (current.isEmpty()) return@withLock null
-        val built = buildReport(current, program, platform, sanitized)
+        val (markdown, redactions) = buildReport(current, program, platform, sanitized)
         val stamp = SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())
         val slug = program.trim().lowercase(Locale.US)
             .replace(Regex("[^a-z0-9]+"), "-").trim('-').take(40).ifBlank { "findings" }
         val filename = "${slug}_report_$stamp.md"
         val storage = runCatching {
-            axStorage.writeText(AxStorageCategory.AGENT, filename, built.markdown, "text/markdown")
+            axStorage.writeText(AxStorageCategory.AGENT, filename, markdown, "text/markdown")
         }.getOrNull()
         ReportExport(
             filename = filename,
@@ -160,7 +160,7 @@ class FindingsStore @Inject constructor(
             savedToSharedStorage = storage?.savedToSharedStorage == true,
             findingCount = current.size,
             bySeverity = current.groupingBy { it.severity }.eachCount(),
-            redactions = built.redactions,
+            redactions = redactions,
             sanitized = sanitized
         )
     }
