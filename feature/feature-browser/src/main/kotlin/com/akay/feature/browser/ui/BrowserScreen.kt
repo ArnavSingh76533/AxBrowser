@@ -1133,6 +1133,92 @@ fun BrowserScreen(
                 return "Wrote ${export.findingCount} finding(s) ($breakdown) to ${export.displayPath}$folderNote. " +
                     "$hygiene Paste it straight into the program's report form, or edit it first."
             }
+
+            // ---------- Identity & network control (v9) ----------
+
+            override suspend fun identityStatus(): String = viewModel.identityTools.status()
+
+            override suspend fun setProxy(
+                label: String,
+                type: String,
+                host: String,
+                port: Int,
+                username: String?,
+                password: String?
+            ): String = try {
+                viewModel.identityTools.setProxy(label, type, host, port, username, password)
+            } catch (e: Exception) {
+                "Couldn't set the proxy: ${e.message}"
+            }
+
+            override suspend fun rotateProxy(): String = try {
+                viewModel.identityTools.rotate()
+            } catch (e: Exception) {
+                "Couldn't rotate the proxy: ${e.message}"
+            }
+
+            override suspend fun setProxyRotation(mode: String, intervalMinutes: Int): String = try {
+                viewModel.identityTools.setRotation(mode, intervalMinutes)
+            } catch (e: Exception) {
+                "Couldn't change the rotation mode: ${e.message}"
+            }
+
+            override suspend fun clearProxy(): String = try {
+                viewModel.identityTools.clear()
+            } catch (e: Exception) {
+                "Couldn't turn the proxy off: ${e.message}"
+            }
+
+            override suspend fun configureFingerprint(
+                regenerate: Boolean,
+                enabled: Boolean?,
+                canvas: Boolean?,
+                webgl: Boolean?,
+                hardware: Boolean?
+            ): String = try {
+                viewModel.identityTools.configureFingerprint(regenerate, enabled, canvas, webgl, hardware)
+            } catch (e: Exception) {
+                "Couldn't change the fingerprint: ${e.message}"
+            }
+
+            override suspend fun waitForResponse(urlFilter: String, timeoutMs: Int): String {
+                if (urlFilter.isBlank()) {
+                    return "wait_for_response needs a url_filter - a substring or regex-ish fragment of the request URL to wait for."
+                }
+                val limit = timeoutMs.coerceIn(200, 60_000)
+                val started = System.currentTimeMillis()
+                var found: com.akay.feature.browser.devconsole.NetworkRequest? = null
+                while (true) {
+                    val matching = com.akay.feature.browser.devconsole.NetworkInterceptor.requests.value
+                        .filter { it.url.contains(urlFilter, ignoreCase = true) }
+                    found = matching.lastOrNull { it.responseStatus != null }
+                    if (found != null) break
+                    if (System.currentTimeMillis() - started >= limit) break
+                    kotlinx.coroutines.delay(250)
+                }
+                val elapsed = System.currentTimeMillis() - started
+                val hit = found
+                if (hit == null) {
+                    val seen = com.akay.feature.browser.devconsole.NetworkInterceptor.requests.value
+                        .count { it.url.contains(urlFilter, ignoreCase = true) }
+                    return if (seen == 0) {
+                        "Nothing matching \"$urlFilter\" was captured in ${elapsed}ms. It may not have been triggered yet, or it comes from a Web Worker (invisible to this capture) - check the trigger, or use get_network_requests to see what did happen."
+                    } else {
+                        "$seen request(s) matching \"$urlFilter\" were captured but none completed within ${elapsed}ms - still pending, or it failed before responding (blocked, CORS, offline)."
+                    }
+                }
+                return buildString {
+                    append("${hit.method} ${hit.url} -> ${hit.responseStatus ?: "?"}")
+                    if (!hit.mimeType.isNullOrBlank()) append(" ${hit.mimeType}")
+                    if (hit.sizeBytes > 0) append(" ${hit.sizeBytes / 1024}KB")
+                    append(" (settled after ${elapsed}ms)\n\n")
+                    if (hit.responseBody.isNotBlank()) {
+                        append(hit.responseBody.take(2500))
+                    } else {
+                        append("(no response body was captured for this request - the fetch/XHR bridge only reads bodies for page-issued calls, not for static subresources)")
+                    }
+                }
+            }
             private suspend fun waitForLoad() {
                 kotlinx.coroutines.delay(400)
                 var waited = 0

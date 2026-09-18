@@ -262,6 +262,33 @@ class AgentEngine(
             credentials to be included. Call it when the user asks for a report, or to wrap up a
             bounty run after list_findings shows the work is recorded.
 
+        Identity (your own exit IP and fingerprint - the two things most likely to get you blocked):
+        - identity_status: {} - which proxy your traffic actually leaves through (or your real IP),
+          the rotation mode, and the device fingerprint currently being presented. Check this FIRST
+          when a page 403s, shows a captcha loop, or serves different content than expected.
+        - set_proxy: {"host": "1.2.3.4", "port": 8080, "type": "HTTP|HTTPS|SOCKS4|SOCKS5",
+            "label": "optional", "username": "optional", "password": "optional"}
+          - adds/updates a proxy and immediately makes it the exit for this session. Use it when the
+            user gives you a proxy, or when a target has blocked the current IP. The user's own
+            proxies are in Settings > Proxy; don't invent proxy hosts.
+        - rotate_proxy: {} - move to the next enabled proxy (new exit IP). Use it when you're being
+          rate-limited or blocked, then retry the failed request.
+        - set_proxy_rotation: {"mode": "MANUAL|PER_NAVIGATION|TIMED", "interval_minutes": 10}
+          - PER_NAVIGATION rotates on every navigation (good for crawling many URLs, bad mid-login).
+        - clear_proxy: {} - back to the real IP, keeping the saved list.
+        - set_fingerprint: {"regenerate": true, "enabled": true, "canvas": true, "webgl": true,
+            "hardware": true} - every key is optional; regenerate=true mints a brand-new device
+          profile. Use it after a site has already fingerprinted this session (endless challenge
+          pages, "unusual traffic" walls) or before starting a fresh scraping run. It only applies
+          on the NEXT page load, so reload after calling it.
+
+        Network:
+        - wait_for_response: {"url_filter": "substring of the request URL", "timeout_ms": 15000}
+          - waits until a matching response is captured and returns its status/method/URL plus the
+            body. This is how you verify an action fired the call you expected ("click Save" -> wait
+            for /api/save) instead of sleeping and guessing, and it's how you catch a silently
+            failed request. Prefer it over waiting for text when the app is a SPA.
+
         - final_answer: {"text": "your final reply to the user, plain text"}
 
         Every user message includes a line like "Current browser page: <url>" showing exactly what
@@ -758,6 +785,35 @@ class AgentEngine(
             program = input.optString("program").ifBlank { null },
             platform = input.optString("platform").ifBlank { null },
             sanitized = input.optBoolean("sanitized", true)
+        )
+
+        // ---------- Identity & network control (v9) ----------
+
+        "identity_status" -> tools.identityStatus()
+        "set_proxy" -> tools.setProxy(
+            label = input.optString("label"),
+            type = input.optString("type", "HTTP"),
+            host = input.optString("host"),
+            port = input.optInt("port"),
+            username = input.optString("username").ifBlank { null },
+            password = input.optString("password").ifBlank { null }
+        )
+        "rotate_proxy" -> tools.rotateProxy()
+        "set_proxy_rotation" -> tools.setProxyRotation(
+            mode = input.optString("mode", "MANUAL"),
+            intervalMinutes = input.optInt("interval_minutes", 10)
+        )
+        "clear_proxy" -> tools.clearProxy()
+        "set_fingerprint" -> tools.configureFingerprint(
+            regenerate = input.optBoolean("regenerate", false),
+            enabled = if (input.has("enabled")) input.optBoolean("enabled") else null,
+            canvas = if (input.has("canvas")) input.optBoolean("canvas") else null,
+            webgl = if (input.has("webgl")) input.optBoolean("webgl") else null,
+            hardware = if (input.has("hardware")) input.optBoolean("hardware") else null
+        )
+        "wait_for_response" -> tools.waitForResponse(
+            urlFilter = input.optString("url_filter"),
+            timeoutMs = input.optInt("timeout_ms", 15_000)
         )
         "download" -> tools.startDownload(input.optString("url").ifBlank { tools.currentUrl() })
         else -> "Unknown action \"$action\"."

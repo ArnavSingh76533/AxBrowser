@@ -313,6 +313,56 @@ interface AgentToolExecutor {
      *  auth-looking header values and token params from the evidence - the report is a document
      *  meant to be shared, so live cookies/tokens are not included unless explicitly asked for. */
     suspend fun exportBugReport(program: String?, platform: String?, sanitized: Boolean): String
+
+    // ---------- Agent v9: identity & network control ----------
+
+    /** The egress identity this session is running as: which proxy the traffic leaves through (or
+     *  the real IP), the rotation mode, and the device fingerprint currently presented. Read this
+     *  before concluding a site "blocked" you - a spent IP or an already-seen fingerprint is the
+     *  far more common explanation, and both are fixable with the tools below. */
+    suspend fun identityStatus(): String
+
+    /** Adds (or updates) a proxy and immediately makes it the exit for this session, turning the
+     *  proxy setting on and selecting the new entry. Same host:port+type is updated in place rather
+     *  than duplicated. [type] is HTTP|HTTPS|SOCKS4|SOCKS5 (default HTTP); [username]/[password] are
+     *  optional. Returns whether WebView actually accepted it, so a bad host/port isn't silent. */
+    suspend fun setProxy(
+        label: String,
+        type: String,
+        host: String,
+        port: Int,
+        username: String?,
+        password: String?
+    ): String
+
+    /** Requests the next enabled proxy (a new exit IP). Reports the IP it actually moved to, and
+     *  says so honestly when nothing moved because every other entry is disabled or was rejected. */
+    suspend fun rotateProxy(): String
+
+    /** Rotation policy: MANUAL (only rotate_proxy moves it), PER_NAVIGATION (a new proxy on every
+     *  navigation - good for crawling, bad mid-login), or TIMED with [intervalMinutes]. */
+    suspend fun setProxyRotation(mode: String, intervalMinutes: Int): String
+
+    /** Stops proxying (back to the real IP) while keeping the saved list intact. */
+    suspend fun clearProxy(): String
+
+    /** Configures the device fingerprint the page is served. Only non-null arguments change;
+     *  [regenerate] mints a brand-new canvas/WebGL/hardware profile, which is what to use once a
+     *  site has already fingerprinted this session. Apply it by reloading: the spoofing script is
+     *  injected at document start, so the current page keeps the old identity until it reloads. */
+    suspend fun configureFingerprint(
+        regenerate: Boolean,
+        enabled: Boolean?,
+        canvas: Boolean?,
+        webgl: Boolean?,
+        hardware: Boolean?
+    ): String
+
+    /** Waits for a network response whose URL matches [urlFilter] and returns its status/method/URL
+     *  plus a body preview - the real "did the click actually trigger the API call I expected"
+     *  primitive, instead of sleeping and then re-reading the whole capture log. [timeoutMs] caps the
+     *  wait; on timeout it reports what WAS captured so the agent isn't left guessing. */
+    suspend fun waitForResponse(urlFilter: String, timeoutMs: Int): String
 }
 
 data class AgentLink(val text: String, val href: String)

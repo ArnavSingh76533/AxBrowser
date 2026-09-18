@@ -79,7 +79,8 @@ class BrowserViewModel @Inject constructor(
     private val siteNoteDao: com.akay.core.data.db.dao.SiteNoteDao,
     private val watchDao: com.akay.core.data.db.dao.WatchDao,
     val axStorage: com.akay.core.data.storage.AxStorage,
-    val findingsStore: com.akay.feature.browser.agent.FindingsStore
+    val findingsStore: com.akay.feature.browser.agent.FindingsStore,
+    val identityTools: com.akay.feature.browser.agent.IdentityTools
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(BrowserUiState())
