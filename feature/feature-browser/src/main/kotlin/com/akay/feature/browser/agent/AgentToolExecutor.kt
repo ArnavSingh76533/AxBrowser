@@ -363,6 +363,46 @@ interface AgentToolExecutor {
      *  primitive, instead of sleeping and then re-reading the whole capture log. [timeoutMs] caps the
      *  wait; on timeout it reports what WAS captured so the agent isn't left guessing. */
     suspend fun waitForResponse(urlFilter: String, timeoutMs: Int): String
+
+    // ---------- Agent v9: scraping pipeline ----------
+
+    /** Breadth-first crawl from [startUrl] (defaults to the current page), loading each discovered
+     *  page in the browser like a reader would - so JS-rendered links that a raw HTML fetch would
+     *  miss are found. Stops at [maxPages] and [maxDepth]; [sameOrigin] keeps it on one host by
+     *  default. Records one row per page (url/title/depth/links/forms) into the session dataset and
+     *  restores the page you were on when it's done. This moves the visible tab while it runs. */
+    suspend fun crawlSite(startUrl: String, maxPages: Int, maxDepth: Int, sameOrigin: Boolean): String
+
+    /** Walks a paginated listing in one call - the thing a 25-step budget otherwise makes impossible.
+     *  Advance either by clicking the next control ([nextSelector], or an auto-detected
+     *  rel=next/"Next"/"More" control) or by bumping a query param ([urlParam], e.g. "page").
+     *  [collectSelector] + [fields] scrape each page with the same shape as scrape_structured
+     *  ([attribute] picks one attribute instead when [fields] is empty). Every collected row is added
+     *  to the session dataset with its source page. Stops when pagination ends, the URL stops
+     *  changing, or [maxPages] is reached - and says which of those happened. */
+    suspend fun autoPaginate(
+        nextSelector: String?,
+        urlParam: String?,
+        collectSelector: String?,
+        fields: Map<String, String>,
+        attribute: String?,
+        maxPages: Int
+    ): String
+
+    /** What the session dataset holds right now: row count, columns, and where the rows came from.
+     *  Check it before exporting so you know you actually collected something. */
+    suspend fun datasetStatus(): String
+
+    /** Writes the session dataset - plus any [records] passed here, so rows you gathered by hand (a
+     *  network response, a table you read off the page) ride along - to one file the user can open.
+     *  [format] is csv (default) | jsonl | json | tsv | md. [clearAfter] resets the buffer so the next
+     *  task starts clean. Empty dataset and no records is reported, not silently written. */
+    suspend fun exportDataset(
+        format: String,
+        filename: String,
+        clearAfter: Boolean,
+        records: List<Map<String, String>>
+    ): String
 }
 
 data class AgentLink(val text: String, val href: String)

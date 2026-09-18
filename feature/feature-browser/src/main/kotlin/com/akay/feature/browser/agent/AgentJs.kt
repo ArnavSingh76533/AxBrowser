@@ -359,6 +359,86 @@ object AgentJs {
         """.trimIndent()
     }
 
+    /**
+     * Everything a crawl needs from one page in a single round-trip: the title, every absolute
+     * crawlable-looking link (deduped by the caller), and the form count - one form usually means a
+     * login/search surface, several mean a data-entry app the crawl should not blind-click through.
+     *
+     * Caps at 300 links: a page with thousands is a listing/hub whose tail is rarely worth the page
+     * budget, and this keeps the payload small enough to read back over the JS bridge quickly.
+     */
+    val CRAWL_PAGE = """
+        (function() {
+            try {
+                var out = { title: (document.title || '').slice(0, 200), url: location.href, links: [], forms: 0 };
+                var seen = {};
+                var nodes = Array.prototype.slice.call(document.querySelectorAll('a[href]'));
+                for (var i = 0; i < nodes.length && out.links.length < 300; i++) {
+                    var href = nodes[i].href;
+                    if (!href || href.indexOf('javascript:') === 0 || href.indexOf('mailto:') === 0 || href.indexOf('tel:') === 0) continue;
+                    var clean = href.split('#')[0];
+                    if (!clean || seen[clean]) continue;
+                    seen[clean] = 1;
+                    out.links.push(clean);
+                }
+                try { out.forms = document.forms.length; } catch (e) { out.forms = 0; }
+                return JSON.stringify(out);
+            } catch (e) {
+                return JSON.stringify({ title: '', url: '', links: [], forms: 0 });
+            }
+        })();
+    """.trimIndent()
+
+    /**
+     * Clicks this page's "next page" control, if it can find one, and reports what it clicked.
+     *
+     * Semantic markers first (rel=next / aria-label=next) because they are what the spec provides;
+     * then visible text, exact matches before substrings, so "More information" never beats a plain
+     * "More". Returns 'false' when nothing matched - the caller treats that as "pagination is over"
+     * and stops, rather than looping on a control that does nothing.
+     */
+    val CLICK_NEXT_PAGE = """
+        (function() {
+            function visible(el) {
+                if (!el) return false;
+                var r = el.getBoundingClientRect();
+                if (r.width <= 0 || r.height <= 0) return false;
+                var st = window.getComputedStyle(el);
+                return st.visibility !== 'hidden' && st.display !== 'none';
+            }
+            function label(el) {
+                var raw = (el.getAttribute && (el.getAttribute('aria-label') || el.getAttribute('title'))) || el.innerText || el.textContent || '';
+                return String(raw).trim().replace(/\s+/g, ' ').slice(0, 40);
+            }
+            function fire(el, how) {
+                try { el.scrollIntoView({block: 'center'}); } catch (e) {}
+                el.click();
+                return how + ': ' + (label(el) || el.tagName.toLowerCase());
+            }
+            var semantic = document.querySelectorAll('a[rel~="next"], [rel="next"], [aria-label*="next" i], [aria-label*="Next" i]');
+            for (var i = 0; i < semantic.length; i++) {
+                if (visible(semantic[i])) return fire(semantic[i], 'rel/aria');
+            }
+            var nodes = Array.prototype.slice.call(document.querySelectorAll('a, button, [role="button"], [onclick]'));
+            var exact = ['next', 'next page', 'older', 'load more', 'show more', 'more', '›', '»', '→', '>>'];
+            var partial = ['next page', 'load more', 'show more'];
+            for (var p = 0; p < 2; p++) {
+                for (var j = 0; j < nodes.length; j++) {
+                    var el = nodes[j];
+                    if (!visible(el)) continue;
+                    var t = label(el).toLowerCase();
+                    if (!t) continue;
+                    if (el.tagName === 'A' && el.getAttribute('href') === '#' && !el.getAttribute('onclick')) continue;
+                    var hit = false;
+                    if (p === 0) { hit = exact.indexOf(t) !== -1; }
+                    else { for (var k = 0; k < partial.length; k++) { if (t.indexOf(partial[k]) !== -1) { hit = true; break; } } }
+                    if (hit) return fire(el, 'text');
+                }
+            }
+            return 'false';
+        })();
+    """.trimIndent()
+
     /** Reads back the CSRF/hidden-field/form summary from the last snapshot's interest areas (cheap re-ask). */
     val STORAGE_DUMP = """
         (function() {

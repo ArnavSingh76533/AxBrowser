@@ -289,6 +289,35 @@ class AgentEngine(
             for /api/save) instead of sleeping and guessing, and it's how you catch a silently
             failed request. Prefer it over waiting for text when the app is a SPA.
 
+        Scraping (for "get me all of X", "scrape every page", "make me a CSV"):
+        - crawl_site: {"start_url": "optional, defaults to the current page", "max_pages": 10,
+            "max_depth": 1, "same_origin": true}
+          - breadth-first crawl that loads each page like a reader, so links that only exist after JS
+            runs are found. It MOVES the visible tab while it runs and restores your starting page at
+            the end, so say so before crawling something big. Records one row per page (url/title/
+            depth/links/forms) and reports the URL map - use it to map a site, or to find which pages
+            are worth scraping.
+        - auto_paginate: {"collect_selector": "CSS selector matching each repeated item",
+            "fields": {"name": "selector relative to the item, or 'selector@attr'"}, "max_pages": 5}
+          - advance the other way instead of clicking, when the listing is address-driven:
+            {"url_param": "page", "collect_selector": "...", ...}
+          - or name the control yourself: {"next_selector": "CSS selector for the next button/link"}
+          - collects EVERY page in one call - this is the tool for "all 20 pages of results", which
+            one-action-per-turn scraping can't do. With no fields, each matched item is captured as
+            its text (or one attribute via "attribute"). Rows land in the session dataset tagged with
+            their source page. It stops by itself when pagination ends or the URL stops changing, and
+            tells you which of those happened.
+        - dataset_status: {} - row count, columns and sources collected so far. Check it before you
+          export so you aren't handing over an empty file.
+        - export_dataset: {"format": "csv|jsonl|json|tsv|md", "filename": "optional",
+            "clear_after": false, "records": [{"any": "rows you gathered by hand"}]}
+          - writes everything to one file in the user's folder and reports the path. csv opens in any
+            spreadsheet; jsonl is what a program/pipeline wants. clear_after resets the buffer for the
+            next task.
+        - The pipeline in practice: scrape_structured (or browser_snapshot) to get the selector right,
+          auto_paginate/crawl_site to collect across pages, dataset_status to confirm the count, then
+          export_dataset to hand the user ONE file. Never paste hundreds of rows into chat.
+
         - final_answer: {"text": "your final reply to the user, plain text"}
 
         Every user message includes a line like "Current browser page: <url>" showing exactly what
@@ -536,7 +565,8 @@ class AgentEngine(
             val fields = fieldsObj.keys().asSequence().associateWith { fieldsObj.optString(it) }
             val results = tools.scrapeStructured(itemSelector, fields)
             if (results.isEmpty()) "No elements matched item_selector \"$itemSelector\"."
-            else results.joinToString("\n") { record -> "- " + record.entries.joinToString(", ") { "${it.key}: ${it.value}" } }
+            else results.joinToString("\n") { record -> "- " + record.entries.joinToString(", ") { "${it.key}: ${it.value}" } } +
+                "\n(${results.size} row(s) also went into the session dataset - scrape the remaining pages, then export_dataset writes them all as one file.)"
         }
         "run_js" -> tools.runJs(input.optString("code")).take(4000)
         "get_network_requests" -> {
@@ -815,6 +845,45 @@ class AgentEngine(
             urlFilter = input.optString("url_filter"),
             timeoutMs = input.optInt("timeout_ms", 15_000)
         )
+
+        // ---------- Scraping pipeline (v9) ----------
+
+        "crawl_site" -> tools.crawlSite(
+            startUrl = input.optString("start_url"),
+            maxPages = input.optInt("max_pages", 10),
+            maxDepth = input.optInt("max_depth", 1),
+            sameOrigin = input.optBoolean("same_origin", true)
+        )
+        "auto_paginate" -> {
+            val fieldsObj = input.optJSONObject("fields") ?: JSONObject()
+            val fields = fieldsObj.keys().asSequence().associateWith { fieldsObj.optString(it) }
+            tools.autoPaginate(
+                nextSelector = input.optString("next_selector").ifBlank { null },
+                urlParam = input.optString("url_param").ifBlank { null },
+                collectSelector = input.optString("collect_selector").ifBlank { null },
+                fields = fields,
+                attribute = input.optString("attribute").ifBlank { null },
+                maxPages = input.optInt("max_pages", 5)
+            )
+        }
+        "dataset_status" -> tools.datasetStatus()
+        "export_dataset" -> {
+            val recordsArr = input.optJSONArray("records")
+            val records: List<Map<String, String>> = if (recordsArr == null) {
+                emptyList()
+            } else {
+                (0 until recordsArr.length()).mapNotNull { i ->
+                    val o = recordsArr.optJSONObject(i) ?: return@mapNotNull null
+                    o.keys().asSequence().associateWith { k -> o.optString(k) }
+                }
+            }
+            tools.exportDataset(
+                format = input.optString("format", "csv"),
+                filename = input.optString("filename"),
+                clearAfter = input.optBoolean("clear_after", false),
+                records = records
+            )
+        }
         "download" -> tools.startDownload(input.optString("url").ifBlank { tools.currentUrl() })
         else -> "Unknown action \"$action\"."
     }

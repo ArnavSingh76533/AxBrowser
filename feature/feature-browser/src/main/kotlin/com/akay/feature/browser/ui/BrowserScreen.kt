@@ -1219,6 +1219,257 @@ fun BrowserScreen(
                     }
                 }
             }
+            // ---------- Scraping pipeline (v9) ----------
+
+            override suspend fun crawlSite(startUrl: String, maxPages: Int, maxDepth: Int, sameOrigin: Boolean): String {
+                val wv = webView ?: return "No page is loaded - open the site you want to crawl first, or pass start_url."
+                val here = currentUrl()
+                val start = com.akay.feature.browser.agent.ScrapePipeline.normalizeUrl(startUrl.ifBlank { here }, here)
+                    ?: return "Couldn't turn \"${startUrl.ifBlank { here }}\" into a crawlable http(s) URL."
+                val pageCap = maxPages.coerceIn(1, 30)
+                val depthCap = maxDepth.coerceIn(0, 4)
+                val startOrigin = com.akay.feature.browser.agent.ScrapePipeline.origin(start)
+
+                val visited = LinkedHashSet<String>()
+                val queue = ArrayDeque<Pair<String, Int>>()
+                queue.addLast(start to 0)
+                val lines = mutableListOf<String>()
+                val discovered = LinkedHashSet<String>()
+                var crawled = 0
+                var offOrigin = 0
+
+                while (queue.isNotEmpty() && crawled < pageCap) {
+                    val (candidate, depth) = queue.removeFirst()
+                    val url = com.akay.feature.browser.agent.ScrapePipeline.normalizeUrl(candidate) ?: continue
+                    if (!visited.add(url)) continue
+                    if (sameOrigin && com.akay.feature.browser.agent.ScrapePipeline.origin(url) != startOrigin) {
+                        offOrigin++
+                        continue
+                    }
+                    if (!com.akay.feature.browser.agent.ScrapePipeline.isCrawlable(url)) continue
+
+                    navigate(url)
+                    crawled++
+                    val info = crawlPageInfo(wv)
+                    lines += "[d$depth] ${info.first.ifBlank { "(untitled)" }} - $url  (${info.second.size} links, ${info.third} forms)"
+                    discovered.addAll(info.second)
+                    viewModel.datasetStore.add(
+                        listOf(
+                            mapOf(
+                                "url" to url,
+                                "title" to info.first,
+                                "depth" to depth.toString(),
+                                "links" to info.second.size.toString(),
+                                "forms" to info.third.toString()
+                            )
+                        ),
+                        source = "crawl",
+                        page = crawled
+                    )
+                    if (depth < depthCap) {
+                        info.second.forEach { link -> if (!visited.contains(link)) queue.addLast(link to depth + 1) }
+                    }
+                }
+
+                val restored = if (here.isNotBlank() && here != currentUrl()) {
+                    navigate(here)
+                    true
+                } else false
+
+                return buildString {
+                    append("Crawled $crawled page(s)")
+                    if (sameOrigin && startOrigin != null) append(" on $startOrigin")
+                    append(" (page cap $pageCap, depth cap $depthCap).\n")
+                    if (lines.isEmpty()) {
+                        append("No page could be crawled - check the start URL is reachable.\n")
+                    }
+                    lines.take(40).forEach { append("- $it\n") }
+                    if (lines.size > 40) append("- ... and ${lines.size - 40} more page(s)\n")
+                    append("Found ${discovered.size} unique link(s)")
+                    if (offOrigin > 0) append("; $offOrigin off-origin URL(s) skipped")
+                    if (queue.isNotEmpty()) append("; ${queue.size} URL(s) were still queued when the cap hit - raise max_pages to go deeper")
+                    append(".\n")
+                    append("$crawled row(s) went into the session dataset - export_dataset writes them as CSV/JSONL.\n")
+                    if (restored) append("Restored the browser to $here.") else append("The browser is left on the last crawled page.")
+                }
+            }
+
+            override suspend fun autoPaginate(
+                nextSelector: String?,
+                urlParam: String?,
+                collectSelector: String?,
+                fields: Map<String, String>,
+                attribute: String?,
+                maxPages: Int
+            ): String {
+                val pageCap = maxPages.coerceIn(1, 20)
+                val collector = collectSelector?.trim()?.takeIf { it.isNotBlank() }
+                val perPage = mutableListOf<Int>()
+                val previews = mutableListOf<String>()
+                var totalRows = 0
+                var pageNumber = 1
+                var stopReason = "reached max_pages ($pageCap)"
+
+                suspend fun collect(): Int {
+                    val selector = collector ?: return 0
+                    val source = currentUrl()
+                    val rows: List<Map<String, String>> = if (fields.isNotEmpty()) {
+                        scrapeStructured(selector, fields)
+                    } else {
+                        scrape(selector, attribute).map { mapOf("value" to it) }
+                    }
+                    if (rows.isEmpty()) return 0
+                    val added = viewModel.datasetStore.add(rows, source = source, page = pageNumber)
+                    if (previews.size < 6) {
+                        val sample = rows.first().entries.joinToString(", ") { "${it.key}=${it.value.take(40)}" }
+                        previews += "page $pageNumber: ${rows.size} row(s) - ${sample.take(180)}"
+                    }
+                    return added.added
+                }
+
+                if (!urlParam.isNullOrBlank()) {
+                    // Param mode: walk ?page=1, ?page=2, ... on the URL that is open now.
+                    val param = urlParam.trim()
+                    val base = currentUrl()
+                    if (base.isBlank()) return "No page is open - navigate to the paginated listing first."
+                    val existing = runCatching {
+                        java.net.URI(base).query
+                            ?.split('&')
+                            ?.firstOrNull { it.substringBefore('=').equals(param, ignoreCase = true) }
+                            ?.substringAfter('=')
+                            ?.toIntOrNull()
+                    }.getOrNull()
+                    var page = (existing ?: 0) + 1
+                    while (pageNumber <= pageCap) {
+                        navigate(pageUrlWithParam(base, param, page))
+                        val added = collect()
+                        perPage += added
+                        totalRows += added
+                        if (added == 0 && pageNumber > 1) {
+                            stopReason = "page $page returned no items - assuming the listing ended"
+                            break
+                        }
+                        if (pageNumber >= pageCap) break
+                        pageNumber++
+                        page++
+                    }
+                } else {
+                    // Click mode: act like a reader and press the next control each time.
+                    while (pageNumber <= pageCap) {
+                        val added = collect()
+                        perPage += added
+                        totalRows += added
+                        if (pageNumber >= pageCap) break
+                        val before = currentUrl()
+                        val clicked: String = if (!nextSelector.isNullOrBlank()) {
+                            if (clickElement(nextSelector)) "selector $nextSelector" else "false"
+                        } else {
+                            val wv = webView
+                            if (wv == null) "false" else unwrapJsString(
+                                wv.evalJs(com.akay.feature.browser.agent.AgentJs.CLICK_NEXT_PAGE)
+                            ).trim()
+                        }
+                        if (clicked == "false" || clicked.isBlank()) {
+                            stopReason = "no next-page control found on page $pageNumber"
+                            break
+                        }
+                        waitForLoad()
+                        val after = currentUrl()
+                        if (after == before) {
+                            stopReason = "clicking \"$clicked\" on page $pageNumber didn't change the URL - the control is inert or paginates in place"
+                            break
+                        }
+                        pageNumber++
+                    }
+                }
+
+                val dataset = viewModel.datasetStore.snapshot()
+                return buildString {
+                    append("auto_paginate finished after $pageNumber page(s) - $stopReason.\n")
+                    if (perPage.any { it > 0 }) {
+                        append("rows per page: ")
+                        append(perPage.mapIndexed { i, n -> "p${i + 1}=" + n }.joinToString(", "))
+                        append("\n")
+                    }
+                    if (collector == null) {
+                        append("No collect_selector was given, so the pages were walked but nothing was scraped - pass one (optionally with fields) to collect rows.\n")
+                    } else if (totalRows == 0) {
+                        append("Collected 0 rows - the selector \"$collector\" matched nothing on these pages. Check it against the page's real markup (browser_snapshot shows the refs/names).\n")
+                    } else {
+                        append("Collected $totalRows row(s) into the session dataset, which now holds ${dataset.rowCount} across all sources.\n")
+                    }
+                    previews.forEach { append("- $it\n") }
+                    append("export_dataset writes the whole dataset out as csv/jsonl/json/tsv/md.")
+                }
+            }
+
+            override suspend fun datasetStatus(): String {
+                val snap = viewModel.datasetStore.snapshot()
+                if (snap.rowCount == 0) {
+                    return "The session dataset is empty. scrape_structured, crawl_site and auto_paginate fill it as they run; export_dataset writes it out."
+                }
+                return buildString {
+                    append("Session dataset: ${snap.rowCount} row(s)\n")
+                    append("columns: ${snap.columns.joinToString(", ")}\n")
+                    append("sources:\n")
+                    snap.sources.take(10).forEach { (src, n) -> append("- $src: $n row(s)\n") }
+                    if (snap.sources.size > 10) append("- ... and ${snap.sources.size - 10} more source(s)\n")
+                    if (snap.droppedRows > 0) {
+                        append("\n${snap.droppedRows} row(s) were dropped - the buffer holds at most ${com.akay.feature.browser.agent.DatasetStore.MAX_ROWS} rows. Export now to keep what you have.\n")
+                    }
+                    append("\nexport_dataset writes it as csv, jsonl, json, tsv or md.")
+                }
+            }
+
+            override suspend fun exportDataset(
+                format: String,
+                filename: String,
+                clearAfter: Boolean,
+                records: List<Map<String, String>>
+            ): String {
+                if (records.isNotEmpty()) {
+                    runCatching { viewModel.datasetStore.add(records, source = "agent") }
+                }
+                val exported = try {
+                    viewModel.datasetStore.export(format, filename, clearAfter)
+                } catch (e: Exception) {
+                    return "Couldn't write the dataset: ${e.message}"
+                }
+                if (exported == null) {
+                    return "The session dataset is empty - scrape something first (scrape_structured, crawl_site or auto_paginate), or pass records to export data you already have."
+                }
+
+                val folderNote = if (exported.savedToSharedStorage) "" else
+                    " (app-private storage - set a save location in Settings > Storage to open it outside the app)"
+                val bufferNote = if (exported.cleared) "The session buffer is now empty, so the next scrape starts fresh."
+                else "The session buffer still holds the rows, so you can export again in another format."
+                return "Wrote ${exported.rowCount} row(s) as ${exported.format.uppercase(java.util.Locale.US)} (${exported.byteCount / 1024}KB) to ${exported.displayPath}$folderNote. $bufferNote"
+            }
+
+            private suspend fun crawlPageInfo(wv: android.webkit.WebView): Triple<String, List<String>, Int> {
+                val raw = runCatching { unwrapJsString(wv.evalJs(com.akay.feature.browser.agent.AgentJs.CRAWL_PAGE)) }.getOrNull()
+                    ?: return Triple("", emptyList(), 0)
+                return runCatching {
+                    val o = org.json.JSONObject(raw)
+                    val arr = o.optJSONArray("links") ?: org.json.JSONArray()
+                    val links = (0 until arr.length())
+                        .mapNotNull { i -> com.akay.feature.browser.agent.ScrapePipeline.normalizeUrl(arr.optString(i)) }
+                        .filter { link -> com.akay.feature.browser.agent.ScrapePipeline.isCrawlable(link) }
+                        .distinct()
+                    Triple(o.optString("title"), links, o.optInt("forms", 0))
+                }.getOrElse { Triple("", emptyList(), 0) }
+            }
+
+            private fun pageUrlWithParam(url: String, param: String, page: Int): String {
+                val base = url.substringBefore('#')
+                val head = base.substringBefore('?')
+                val query = base.substringAfter('?', "")
+                val parts = if (query.isBlank()) mutableListOf<String>() else query.split('&').toMutableList()
+                val index = parts.indexOfFirst { it.substringBefore('=').equals(param, ignoreCase = true) }
+                if (index >= 0) parts[index] = "$param=$page" else parts.add("$param=$page")
+                return head + "?" + parts.joinToString("&")
+            }
+
             private suspend fun waitForLoad() {
                 kotlinx.coroutines.delay(400)
                 var waited = 0
@@ -1308,13 +1559,19 @@ fun BrowserScreen(
                 val wv = webView ?: return emptyList()
                 if (itemSelector.isBlank() || fields.isEmpty()) return emptyList()
                 val raw = unwrapJsString(wv.evalJs(com.akay.feature.browser.agent.AgentJs.scrapeStructured(itemSelector, fields)))
-                return runCatching {
+                val rows = runCatching {
                     val arr = org.json.JSONArray(raw)
                     (0 until arr.length()).map { i ->
                         val o = arr.getJSONObject(i)
                         o.keys().asSequence().associateWith { k -> o.optString(k) }
                     }
                 }.getOrDefault(emptyList())
+                // Every structured scrape also lands in the session dataset, so a multi-page scrape can
+                // end in one export instead of the model re-emitting hundreds of rows through the chat.
+                if (rows.isNotEmpty()) {
+                    runCatching { viewModel.datasetStore.add(rows, source = currentUrl()) }
+                }
+                return rows
             }
 
             override suspend fun runJs(code: String): String {
