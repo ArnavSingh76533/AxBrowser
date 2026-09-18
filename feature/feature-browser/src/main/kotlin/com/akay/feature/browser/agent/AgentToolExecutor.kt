@@ -287,6 +287,32 @@ interface AgentToolExecutor {
      *  only way to reach inside a cross-origin iframe - captcha checkboxes, embedded payment
      *  widgets, canvas apps - because same-document JS cannot click across an origin boundary. */
     suspend fun tapAt(x: Float, y: Float): Boolean
+
+    // ---------- Bug-bounty findings (v8) ----------
+
+    /** Records one vulnerability finding in the session's findings list, persisted to
+     *  Agent/findings.json so it survives process death. [severity] is normalized to
+     *  critical|high|medium|low|info (anything unrecognized becomes "info"). [url] defaults to the
+     *  current page when blank. [description] should state what's wrong, the impact, and the
+     *  suggested fix; [evidence] should be the proof - a get_curl command, a request/response, a
+     *  JS snippet. Returns a confirmation with the assigned finding id and the running total. */
+    suspend fun saveFinding(
+        title: String,
+        severity: String,
+        url: String,
+        description: String,
+        evidence: String
+    ): String
+
+    /** Every recorded finding, one line each (id, severity, title, URL, when, evidence preview),
+     *  optionally narrowed to a single [severity]. Empty when nothing has been recorded. */
+    suspend fun listFindings(severity: String?): List<String>
+
+    /** Writes every recorded finding as one Markdown report shaped for HackerOne/Bugcrowd/
+     *  YesWeHack into app storage and returns where it landed. [sanitized] (default true) redacts
+     *  auth-looking header values and token params from the evidence - the report is a document
+     *  meant to be shared, so live cookies/tokens are not included unless explicitly asked for. */
+    suspend fun exportBugReport(program: String?, platform: String?, sanitized: Boolean): String
 }
 
 data class AgentLink(val text: String, val href: String)

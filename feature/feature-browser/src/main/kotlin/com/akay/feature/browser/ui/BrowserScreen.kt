@@ -1070,6 +1070,69 @@ fun BrowserScreen(
 
     val agentTools = remember(webView) {
         object : com.akay.feature.browser.agent.AgentToolExecutor {
+
+            // ---------- Bug-bounty findings (v8) ----------
+
+            override suspend fun saveFinding(
+                title: String,
+                severity: String,
+                url: String,
+                description: String,
+                evidence: String
+            ): String {
+                if (title.isBlank()) return "A finding needs at least a title."
+                val target = url.trim().ifBlank { webView?.url ?: viewModel.uiState.value.displayUrl }
+                return try {
+                    val saved = viewModel.findingsStore.add(title, severity, target, description, evidence)
+                    val location = when {
+                        saved.storage == null ->
+                            "Held in this session only - writing findings.json failed."
+                        saved.storage.savedToSharedStorage ->
+                            "Saved to ${saved.storage.displayPath}."
+                        else ->
+                            "Saved to ${saved.storage.displayPath} (app-private storage - set a save location in Settings > Storage to make it visible outside the app)."
+                    }
+                    "Recorded ${saved.finding.id} [${saved.finding.severity.uppercase(java.util.Locale.US)}] \"$title\" against ${if (target.isBlank()) "(no URL)" else target}. " +
+                        "$location Total findings: ${saved.total}."
+                } catch (e: Exception) {
+                    "Could not record the finding: ${e.message}"
+                }
+            }
+
+            override suspend fun listFindings(severity: String?): List<String> {
+                val items = viewModel.findingsStore.all(severity)
+                val fmt = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US)
+                fun oneLine(s: String) = s.replace(Regex("\\s+"), " ")
+                return items.map { f ->
+                    buildString {
+                        append("[${f.severity.uppercase(java.util.Locale.US)}] ${f.title}\n")
+                        append("  id ${f.id} - ${if (f.url.isBlank()) "(no url)" else f.url} - ${fmt.format(java.util.Date(f.createdAt))}\n")
+                        if (f.description.isNotBlank()) append("  why: ${oneLine(f.description).take(220)}\n")
+                        if (f.evidence.isNotBlank()) append("  evidence: ${oneLine(f.evidence).take(220)}")
+                    }.trimEnd()
+                }
+            }
+
+            override suspend fun exportBugReport(program: String?, platform: String?, sanitized: Boolean): String {
+                val export = try {
+                    viewModel.findingsStore.exportReport(program.orEmpty(), platform.orEmpty(), sanitized)
+                } catch (e: Exception) {
+                    return "Could not write the report: ${e.message}"
+                }
+                if (export == null) return "No findings recorded yet - use save_finding first, then export."
+
+                val breakdown = com.akay.feature.browser.agent.FindingsStore.SEVERITIES
+                    .filter { export.bySeverity.containsKey(it) }
+                    .joinToString(", ") { "${export.bySeverity[it]} $it" }
+                val hygiene = if (export.sanitized) {
+                    if (export.redactions > 0) "Evidence was sanitized ($export.redactions auth-looking value(s) redacted)."
+                    else "Evidence was sanitized (nothing auth-looking found to redact)."
+                } else "Evidence was NOT sanitized - live cookies/tokens may be present, share it carefully."
+                val folderNote = if (export.savedToSharedStorage) "" else
+                    " (app-private storage - set a save location in Settings > Storage to open it outside the app)"
+                return "Wrote ${export.findingCount} finding(s) ($breakdown) to ${export.displayPath}$folderNote. " +
+                    "$hygiene Paste it straight into the program's report form, or edit it first."
+            }
             private suspend fun waitForLoad() {
                 kotlinx.coroutines.delay(400)
                 var waited = 0

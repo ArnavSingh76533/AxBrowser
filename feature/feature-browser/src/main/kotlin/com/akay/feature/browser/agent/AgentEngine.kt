@@ -242,6 +242,26 @@ class AgentEngine(
         - set_match_replace: {"type": "REPLACE_REQ_HEADER|REPLACE_REQ_BODY|REPLACE_RESP_BODY", "match": "...", "replace": "...", "is_regex": false}
         - send_to_repeater: {"url_filter": "substring of a captured request"} - hands it to Repeater
 
+        Findings (bug-bounty output - record what you found, then export a report):
+        - save_finding: {"title": "short specific name", "severity": "critical|high|medium|low|info",
+            "url": "affected URL", "description": "what's wrong, the impact, and the suggested fix",
+            "evidence": "the proof - the get_curl command / request+response / JS snippet"}
+          - use this the moment you confirm something exploitable or clearly wrong: IDOR, missing
+            authz, an exposed secret, a missing/weak control, a leaked internal endpoint. Record it
+            immediately - a run can end before you get to write it down at the end.
+          - write the description for a triager who was not watching: what the flaw is, what an
+            attacker gets from it, and how to fix it. Put the raw proof in evidence, never in prose.
+          - severity is normalized: write exactly one of the five words; anything else becomes "info".
+        - list_findings: {"severity": "optional filter"} - everything recorded so far, so you can
+          report, dedupe or avoid re-recording the same issue twice.
+        - export_bug_report: {"program": "program/target name", "platform": "HackerOne|Bugcrowd|...",
+            "sanitized": true}
+          - writes ONE Markdown report (summary table + per-finding description/impact/evidence) to a
+            file the user can paste into a report form. sanitized defaults to true and redacts
+            cookies/tokens from the evidence - only set it false if the user explicitly asks for live
+            credentials to be included. Call it when the user asks for a report, or to wrap up a
+            bounty run after list_findings shows the work is recorded.
+
         - final_answer: {"text": "your final reply to the user, plain text"}
 
         Every user message includes a line like "Current browser page: <url>" showing exactly what
@@ -708,6 +728,37 @@ class AgentEngine(
             input.optBoolean("is_regex", false)
         )
         "send_to_repeater" -> tools.sendToRepeater(input.optString("url_filter"))
+        "save_finding" -> {
+            val title = input.optString("title")
+            if (title.isBlank()) {
+                "A finding needs a \"title\". Expected: {\"title\":"...,"severity":"high|medium|low|critical|info","url":"...","description":"...","evidence":"..."}"
+            } else {
+                val url = input.optString("url").ifBlank {
+                    runCatching { tools.currentUrl() }.getOrDefault("")
+                }
+                tools.saveFinding(
+                    title = title,
+                    severity = input.optString("severity", "info"),
+                    url = url,
+                    description = input.optString("description"),
+                    evidence = input.optString("evidence")
+                )
+            }
+        }
+        "list_findings" -> {
+            val severity = input.optString("severity").ifBlank { null }
+            val results = tools.listFindings(severity)
+            when {
+                results.isNotEmpty() -> results.joinToString("\n\n")
+                severity != null -> "No findings recorded with severity \"$severity\"."
+                else -> "No findings recorded yet - use save_finding to record one."
+            }
+        }
+        "export_bug_report" -> tools.exportBugReport(
+            program = input.optString("program").ifBlank { null },
+            platform = input.optString("platform").ifBlank { null },
+            sanitized = input.optBoolean("sanitized", true)
+        )
         "download" -> tools.startDownload(input.optString("url").ifBlank { tools.currentUrl() })
         else -> "Unknown action \"$action\"."
     }
