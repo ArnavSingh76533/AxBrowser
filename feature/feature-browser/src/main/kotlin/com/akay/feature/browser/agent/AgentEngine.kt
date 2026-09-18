@@ -731,7 +731,7 @@ class AgentEngine(
         "save_finding" -> {
             val title = input.optString("title")
             if (title.isBlank()) {
-                "A finding needs a \"title\". Expected: {\"title\":"...,"severity":"high|medium|low|critical|info","url":"...","description":"...","evidence":"..."}"
+                "A finding needs a title. Expected keys: title, severity, url, description, evidence."
             } else {
                 val url = input.optString("url").ifBlank {
                     runCatching { tools.currentUrl() }.getOrDefault("")
