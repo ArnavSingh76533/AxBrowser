@@ -637,7 +637,6 @@ fun BrowserScreen(
                                 activeProxy = { viewModel.activeProxy.value },
                                 onVisitedUrl = { viewModel.updateUrl(it) },
                                 onPageStarted = { url ->
-                                    extensions.runtime.navigationStarted(this)
                                     extensions.runtime.navigation(viewModel.uiState.value.activeTab?.id, url, "onBeforeNavigate", incognitoState.value)
                                     AdBlockEngine.resetCounter()
                                     viewModel.updateUrl(url)

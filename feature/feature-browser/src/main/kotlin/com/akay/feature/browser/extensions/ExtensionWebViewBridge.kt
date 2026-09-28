@@ -40,9 +40,6 @@ class ExtensionWebViewBridge(private val runtime: ExtensionRuntime) {
                 override fun onPermissionRequest(request: PermissionRequest) { request.deny() }
             }
             webViewClient = object : WebViewClient() {
-                override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
-                    runtime.navigationStarted(view)
-                }
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) =
                     !(request.url.scheme == "https" && request.url.host == "${ext.id}.ax-extension.invalid" && request.url.port in listOf(-1, 443))
                 override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse {

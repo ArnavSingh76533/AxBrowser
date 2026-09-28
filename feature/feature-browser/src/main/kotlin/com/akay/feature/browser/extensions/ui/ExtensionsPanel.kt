@@ -147,7 +147,7 @@ fun ExtensionsPanel(vm: ExtensionViewModel, onOpenStore: () -> Unit, onOpenUserS
                     val result = remember { runCatching { ExtensionWebViewBridge(vm.runtime).create(request.extension, request.path) } }
                     val view = result.getOrNull()
                     if (view != null) {
-                        DisposableEffect(view) { onDispose { vm.runtime.navigationStarted(view); view.stopLoading(); view.destroy() } }
+                        DisposableEffect(view) { onDispose { vm.runtime.invalidateView(view); view.stopLoading(); view.destroy() } }
                         AndroidView(factory = { view }, modifier = Modifier.fillMaxWidth().weight(1f))
                     } else Text(result.exceptionOrNull()?.message ?: "Extension page unavailable", Modifier.padding(24.dp))
                 }

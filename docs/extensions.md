@@ -59,6 +59,8 @@ Requests are `{v:1,id:"7",method:"storage.local.get",args:["theme"]}`. Replies a
 
 The shim supports Promises and Chrome callbacks. Callback failures set `runtime.lastError` during the callback only. Unknown methods reject with an explicit unsupported error. Events support listener add/remove/has checks. `runtime.getManifest`, `runtime.getURL` and i18n helpers are synchronous.
 
+Document replacement is detected by the new document's native reply-proxy handshake. It retires the previous endpoint and its pending responses. Do not invalidate the new endpoint from `onPageStarted`: WebView 103 was observed delivering that callback after document-start JavaScript and the popup's first message. Explicit view disposal, script re-registration, disable and uninstall still invalidate immediately; every request also checks the live origin, package and permissions.
+
 ### Manifest and lifecycle
 
 Only MV3 is accepted. The parser handles `background.service_worker` (including module entrypoints), `content_scripts`, `action`, `permissions`, `host_permissions`, `optional_permissions`, `optional_host_permissions`, `options_page`/`options_ui`, icons and commands. Original manifest fields remain available through `getManifest`; unsupported fields are not evidence of support. `web_accessible_resources` are **not** exposed to normal pages in this implementation.

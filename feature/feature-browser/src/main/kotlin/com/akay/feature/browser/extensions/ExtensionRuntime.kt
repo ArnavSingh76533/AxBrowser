@@ -69,9 +69,9 @@ class ExtensionRuntime(val context: Context, val manager: ExtensionManager, val 
         subscriptions.remove(view)?.close()
         subscriptions[view] = ContentScriptManager(this, view, tabId, incognito).also { it.register() }
     }
-    fun detach(view: WebView) { navigationStarted(view); subscriptions.remove(view)?.close() }
-    fun refreshContent() { subscriptions.forEach { (view, scripts) -> navigationStarted(view); scripts.register() } }
-    fun navigationStarted(view: WebView) {
+    fun detach(view: WebView) { invalidateView(view); subscriptions.remove(view)?.close() }
+    fun refreshContent() { subscriptions.forEach { (view, scripts) -> invalidateView(view); scripts.register() } }
+    fun invalidateView(view: WebView) {
         val removed = endpoints.filter { it.view === view }
         removed.forEach { retired[it.proxy] = true }
         endpoints.removeAll(removed.toSet())
@@ -79,6 +79,13 @@ class ExtensionRuntime(val context: Context, val manager: ExtensionManager, val 
     }
     fun register(ep: ExtensionEndpoint) {
         check(retired[ep.proxy] != true) { "Document context expired" }
+        // onPageStarted may arrive AFTER document-start JS on older WebViews. The
+        // new document's native reply proxy is the authoritative replacement signal.
+        val previous = endpoints.filter { it !== ep && it.view === ep.view && it.extensionId == ep.extensionId && it.kind == ep.kind }
+        previous.forEach { retired[it.proxy] = true }
+        responses.filterValues { it.first in previous }.keys.toList().forEach { token ->
+            responses.remove(token)?.second?.completeExceptionally(IllegalStateException("Document replaced"))
+        }
         endpoints.removeAll { it.view === ep.view && it.extensionId == ep.extensionId && it.kind == ep.kind }
         endpoints.add(ep)
     }
