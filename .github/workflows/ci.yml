@@ -70,6 +70,9 @@ jobs:
       # Timestamp only, so the Telegram summary can report how long the build took.
       run: echo "T0=$(date +%s)" >> "$GITHUB_OUTPUT"
 
+    - name: Test extension JavaScript bridge
+      run: node --test scripts/test-extension-shim.cjs
+
     - name: Set up JDK 17
       uses: actions/setup-java@v4
       with:
@@ -80,7 +83,7 @@ jobs:
       uses: gradle/actions/setup-gradle@v4
       with:
         cache-read-only: ${{ github.ref != 'refs/heads/main' }}
-        gradle-version: '8.6'
+        gradle-version: '8.9'
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
@@ -89,7 +92,7 @@ jobs:
       run: |
         if [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
           echo "Generating Gradle wrapper..."
-          gradle wrapper --gradle-version 8.6 --no-daemon
+          gradle wrapper --gradle-version 8.9 --no-daemon
         fi
 
     - name: Compute nightly version

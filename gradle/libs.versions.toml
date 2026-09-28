@@ -1,8 +1,8 @@
 [versions]
-agp = "8.2.2"
+agp = "8.7.3"
 kotlin = "2.0.0"
 ksp = "2.0.0-1.0.21"
-hilt = "2.51"
+hilt = "2.53.1"
 room = "2.6.1"
 compose-bom = "2024.02.00"
 compose-compiler = "1.5.10"
@@ -30,7 +30,7 @@ appcompat = "1.6.1"
 material = "1.11.0"
 security-crypto = "1.1.0-alpha06"
 biometric = "1.1.0"
-webkit = "1.11.0"
+webkit = "1.16.0"
 documentfile = "1.0.1"
 
 [libraries]

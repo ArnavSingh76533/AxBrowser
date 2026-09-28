@@ -54,6 +54,8 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.akay.core.ui.theme.Primary
+import com.akay.feature.browser.extensions.ExtensionInstaller
+import com.akay.feature.browser.extensions.ExtensionViewModel
 import com.akay.feature.browser.adblock.AdBlockEngine
 import com.akay.feature.browser.devconsole.DevConsolePanel
 import com.akay.feature.browser.devconsole.NetworkInterceptor
@@ -92,6 +94,7 @@ private fun Context.findActivity(): Activity? {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BrowserScreen(
+    extensions: ExtensionViewModel,
     viewModel: BrowserViewModel = hiltViewModel(),
     downloadViewModel: DownloadViewModel = hiltViewModel(),
     onOpenSettings: () -> Unit = {}
@@ -387,6 +390,7 @@ fun BrowserScreen(
                                 Icon(Icons.Default.MoreVert, "Menu", modifier = Modifier.size(20.dp))
                             }
                             BrowserOverflowMenu(
+                                onExtensions = { extensions.showManager.value = true },
                                 expanded = showMenu,
                                 onDismiss = { showMenu = false },
                                 canGoForward = uiState.canGoForward,
@@ -566,8 +570,13 @@ fun BrowserScreen(
             if (isNewTab) {
                 NewTabPage(onSearch = { viewModel.navigateToUrl(it) })
             } else {
+                key(uiState.activeTab?.id) {
                 AndroidView(
                     factory = { ctx ->
+                        appliedFingerprintScript = null
+                        fingerprintScriptHandler = null
+                        appliedDesktopMode = null
+                        lastNavigatedUrl = uiState.url
                         WebView(ctx).apply {
                             layoutParams = ViewGroup.LayoutParams(
                                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -626,7 +635,10 @@ fun BrowserScreen(
                             webViewClient = AxWebViewClient(
                                 context = ctx,
                                 activeProxy = { viewModel.activeProxy.value },
+                                onVisitedUrl = { viewModel.updateUrl(it) },
                                 onPageStarted = { url ->
+                                    extensions.runtime.navigationStarted(this)
+                                    extensions.runtime.navigation(viewModel.uiState.value.activeTab?.id, url, "onBeforeNavigate", incognitoState.value)
                                     AdBlockEngine.resetCounter()
                                     viewModel.updateUrl(url)
                                     viewModel.updateNavigationState(
@@ -666,6 +678,7 @@ fun BrowserScreen(
                                     }
                                 },
                                 onPageFinished = { url, title ->
+                                    extensions.runtime.navigation(viewModel.uiState.value.activeTab?.id, url, "onCompleted", incognitoState.value)
                                     viewModel.updateProgress(100)
                                     viewModel.updateNavigationState(
                                         isLoading = false,
@@ -710,7 +723,10 @@ fun BrowserScreen(
                                     evaluateJavascript(PasswordCaptureBridge.CAPTURE_JS, null)
                                     viewModel.onPageOriginLoaded(url)
                                 },
-                                onError = { viewModel.updateTitle("Error") },
+                                onError = {
+                                    extensions.runtime.navigation(viewModel.uiState.value.activeTab?.id, url.orEmpty(), "onErrorOccurred", incognitoState.value)
+                                    viewModel.updateTitle("Error")
+                                },
                                 adBlockerEnabled = { adBlockOnState.value },
                                 httpsUpgradeEnabled = { httpsUpgradeOnState.value },
                                 onMediaDetected = { mUrl, mime ->
@@ -732,6 +748,7 @@ fun BrowserScreen(
                             )
 
                             webView = this
+                            extensions.attach(this, uiState.activeTab?.id, incognitoState.value)
                             // Native -> page channel for Intercept decisions. InterceptController
                             // holds the parked request; this pushes the operator's Forward/Drop back
                             // into the fetch/XHR promise that is still waiting in net_capture.js.
@@ -791,8 +808,30 @@ fun BrowserScreen(
                             else wv.loadUrl(uiState.url, customHeadersState.value)
                         }
                     },
+                    onRelease = { released ->
+                        extensions.detach(released)
+                        released.stopLoading()
+                        released.destroy()
+                        if (webView === released) webView = null
+                    },
+                    onReset = null,
                     modifier = Modifier.fillMaxSize()
                 )
+                }
+
+                val storeId = ExtensionInstaller.storeId(uiState.displayUrl)
+                if (storeId != null && !isIncognito) {
+                    Surface(modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(16.dp), shape = RoundedCornerShape(20.dp), tonalElevation = 6.dp, shadowElevation = 8.dp) {
+                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Icon(Icons.Default.Extension, null, tint = MaterialTheme.colorScheme.primary)
+                            Column(Modifier.weight(1f)) {
+                                Text("Chrome Web Store", fontWeight = FontWeight.SemiBold)
+                                Text("Review compatibility and permissions", style = MaterialTheme.typography.bodySmall)
+                            }
+                            Button(onClick = { extensions.installStore(uiState.displayUrl) }) { Text("Add to Browser") }
+                        }
+                    }
+                }
 
                 EdgeSwipeOverlay(
                     canGoBack = uiState.canGoBack && !readerModeActive,
@@ -2610,6 +2649,7 @@ fun BrowserScreen(
 
 @Composable
 fun BrowserOverflowMenu(
+    onExtensions: () -> Unit,
     expanded: Boolean,
     onDismiss: () -> Unit,
     canGoForward: Boolean,
@@ -2633,6 +2673,11 @@ fun BrowserOverflowMenu(
     onToggleSiteAdBlock: () -> Unit
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        DropdownMenuItem(
+            text = { Text("Extensions") },
+            leadingIcon = { Icon(Icons.Default.Extension, null) },
+            onClick = { onDismiss(); onExtensions() }
+        )
         if (adBlockOn) {
             DropdownMenuItem(
                 text = { Text(if (siteAdBlockAllowlisted) "Ad-block disabled on this site" else "Ad-block enabled on this site") },

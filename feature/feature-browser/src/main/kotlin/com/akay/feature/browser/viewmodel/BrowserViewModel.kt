@@ -371,9 +371,18 @@ class BrowserViewModel @Inject constructor(
                 _uiState.value = _uiState.value.copy(tabs = tabs)
                 if (tabs.isEmpty()) {
                     createNewTab()
-                } else if (_uiState.value.activeTab == null) {
-                    val activeTab = tabs.find { it.isActive } ?: tabs.first()
-                    setActiveTab(activeTab)
+                } else {
+                    // Repository changes can also originate from the extension adapter.
+                    val previous = _uiState.value.activeTab
+                    val selected = tabs.find { it.isActive } ?: tabs.find { it.id == previous?.id } ?: tabs.first()
+                    val needsNavigation = previous?.id != selected.id ||
+                        (previous.url != selected.url && _uiState.value.displayUrl != selected.url)
+                    if (needsNavigation) {
+                        _uiState.value = _uiState.value.copy(activeTab = selected, url = selected.url,
+                            displayUrl = selected.url, title = selected.title, showTabSwitcher = false)
+                    } else {
+                        _uiState.value = _uiState.value.copy(activeTab = selected)
+                    }
                 }
             }
         }

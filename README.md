@@ -16,6 +16,12 @@ A fast, secure, privacy-first Android browser with built-in smart media detectio
 - **Built-in Video Player** — Play downloaded videos with ExoPlayer
 - **File Manager** — Browse and manage downloaded files
 
+## Extension compatibility (experimental)
+
+Use **Menu → Extensions** to load Manifest V3 folders/ZIPs/signed CRX3 packages, review permissions, enable/disable extensions, and open their popup/options pages. Official Chrome Web Store listings show a native **Add to Browser** action with best-effort verified package retrieval.
+
+This is a partial WebView compatibility bridge: **not every Chrome extension works**, Store downloads are not guaranteed, and content scripts require an Android System WebView with isolated-world support. See [architecture, API matrix, security model and test instructions](docs/extensions.md). A working sample is included at [examples/extensions/hello-ax](examples/extensions/hello-ax).
+
 ## Download
 
 [**Download Latest APK**](https://github.com/akborana3/AxBrowser/releases/latest)
