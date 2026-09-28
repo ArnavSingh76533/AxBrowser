@@ -30,7 +30,7 @@ jobs:
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v4
       with:
-        gradle-version: '8.6'
+        gradle-version: '8.9'
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
@@ -39,7 +39,7 @@ jobs:
       run: |
         if [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
           echo "Generating Gradle wrapper..."
-          gradle wrapper --gradle-version 8.6 --no-daemon
+          gradle wrapper --gradle-version 8.9 --no-daemon
         fi
 
     - name: Extract version from tag

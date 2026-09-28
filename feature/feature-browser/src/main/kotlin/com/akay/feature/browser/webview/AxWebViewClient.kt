@@ -25,7 +25,8 @@ class AxWebViewClient(
     private val adBlockerEnabled: () -> Boolean = { true },
     private val httpsUpgradeEnabled: () -> Boolean = { true },
     private val onMediaDetected: (url: String, mimeType: String?) -> Unit = { _, _ -> },
-    private val activeProxy: () -> ProxyServer? = { null }
+    private val activeProxy: () -> ProxyServer? = { null },
+    private val onVisitedUrl: (String) -> Unit = {}
 ) : WebViewClient() {
 
     override fun onReceivedHttpAuthRequest(view: WebView?, handler: HttpAuthHandler?, host: String?, realm: String?) {
@@ -146,6 +147,12 @@ class AxWebViewClient(
         super.onPageFinished(view, url)
         currentPageOrigin = originOf(url)
         onPageFinished(url ?: "", view?.title)
+    }
+
+    override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
+        super.doUpdateVisitedHistory(view, url, isReload)
+        // Includes same-document navigation, such as Store listing links in its SPA.
+        url?.let(onVisitedUrl)
     }
 
     override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {

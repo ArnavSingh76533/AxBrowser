@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Hello Ax",
+  "version": "1.0.0",
+  "description": "A small compatibility test: isolated page styling, messaging, storage, popup, options and page actions.",
+  "permissions": ["storage", "tabs", "contextMenus", "scripting"],
+  "host_permissions": ["https://example.com/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "Hello Ax" },
+  "options_ui": { "page": "options.html" },
+  "commands": { "say-hello": { "description": "Show a hello badge" } },
+  "content_scripts": [{ "matches": ["https://example.com/*"], "js": ["content.js"], "css": ["content.css"], "run_at": "document_end" }]
+}

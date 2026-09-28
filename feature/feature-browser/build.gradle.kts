@@ -33,7 +33,11 @@ dependencies {
     implementation(libs.coroutines.android)
     implementation(libs.okhttp)
     implementation(libs.webkit)
+    implementation(libs.documentfile)
 
     testImplementation(libs.junit5.api)
     testRuntimeOnly(libs.junit5.engine)
+    testImplementation("org.json:json:20240303")
 }
+
+tasks.withType<Test>().configureEach { useJUnitPlatform() }

@@ -17,6 +17,9 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.*
 import androidx.navigation.compose.*
 import com.akay.core.ui.theme.Primary
+import com.akay.feature.browser.extensions.ExtensionViewModel
+import com.akay.feature.browser.extensions.ui.ExtensionsPanel
+import com.akay.feature.browser.viewmodel.BrowserViewModel
 import com.akay.feature.bookmarks.ui.BookmarkScreen
 import com.akay.feature.downloads.ui.DownloadManagerScreen
 import com.akay.feature.downloads.viewmodel.DownloadViewModel
@@ -47,6 +50,16 @@ fun BrowserNavHost() {
     val currentRoute = currentBackStack?.destination?.route
     val showBottomBar = bottomNavItems.any { it.route == currentRoute }
     val downloadViewModel: DownloadViewModel = hiltViewModel()
+    val browserViewModel: BrowserViewModel = hiltViewModel()
+    val extensionViewModel: ExtensionViewModel = hiltViewModel()
+    LaunchedEffect(downloadViewModel) { extensionViewModel.bindDownloads(downloadViewModel) }
+    ExtensionsPanel(extensionViewModel,
+        onOpenStore = {
+            browserViewModel.createNewTab("https://chromewebstore.google.com/")
+            navController.navigate(NavRoute.Browser.route) { launchSingleTop = true }
+        },
+        onOpenUserScripts = { navController.navigate("userscripts") }
+    )
 
     Scaffold(
         bottomBar = {
@@ -117,6 +130,8 @@ fun BrowserNavHost() {
         ) {
             composable(NavRoute.Browser.route) {
                 BrowserScreen(
+                    viewModel = browserViewModel,
+                    extensions = extensionViewModel,
                     downloadViewModel = downloadViewModel,
                     onOpenSettings = { navController.navigate(NavRoute.Settings.route) }
                 )
@@ -141,7 +156,7 @@ fun BrowserNavHost() {
             composable(NavRoute.Settings.route) {
                 SettingsScreen(
                     onBack = { navController.popBackStack() },
-                    onOpenExtensions = { navController.navigate("userscripts") },
+                    onOpenExtensions = { extensionViewModel.showManager.value = true },
                     onOpenFilterLists = { navController.navigate("filterlists") },
                     onOpenPasswords = { navController.navigate("passwords") },
                     onOpenProxySettings = { navController.navigate("proxy") },
